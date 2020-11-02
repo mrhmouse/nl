@@ -35,6 +35,7 @@ struct nl_state {
   FILE *stdout, *stdin, *stderr;
   char *last_err;
   struct nl_symbols *symbols;
+  struct nl_state *parent_state;
 };
 
 struct nl_cell nl_cell_as_nil() {
@@ -66,27 +67,73 @@ struct nl_cell nl_cell_as_symbol(char *interned_symbol) {
   return c;
 }
 
+typedef int (*nl_native_func)(struct nl_state *, struct nl_cell, struct nl_cell *result);
+
 void nl_state_put(struct nl_state *state, const char *name, struct nl_cell value) {
-  struct nl_symbols *s;
-  for (s = state->symbols; s->next != NULL; s = s->next)
-    if (0 == strcmp(name, s->name)) {
-      s->value.type = NL_NIL;
-      return;
+  int match = 0;
+  struct nl_symbols *s, *l;
+  for (; state != NULL; state = state->parent_state) {
+    for (s = state->symbols; s != NULL; s = s->next) {
+      l = s;
+      if (0 == strcmp(name, s->name)) {
+        match = 1;
+        break;
+      }
     }
-  s->next = malloc(sizeof(*s->next));
-  s->next->name = strdup(name);
-  s->next->value = value;
+    if (match) break;
+  }
+  if (!match) {
+    l->next = malloc(sizeof(*l->next));
+    l->next->name = strdup(name);
+    l = l->next;
+  }
+  l->value = value;
 }
 
+void nl_state_get(struct nl_state *state, const char *name, struct nl_cell *result) {
+  struct nl_symbols *s;
+  for (s = state->symbols; s != NULL; s = s->next)
+    if (0 == strcmp(name, s->name)) {
+      *result = s->value;
+      return;
+    }
+  if (state->parent_state) nl_state_get(state->parent_state, name, result);
+  else *result = nl_cell_as_nil();
+}
+
+void nl_state_link(struct nl_state *child, struct nl_state *parent) {
+  child->stdout = parent->stdout;
+  child->stdin = parent->stdin;
+  child->stderr = parent->stderr;
+  child->parent_state = parent;
+}
+
+int nl_quote(struct nl_state *state, struct nl_cell cell, struct nl_cell *result) {
+  *result = cell;
+  return 0;
+}
+
+int nl_print(struct nl_state *, struct nl_cell, struct nl_cell *);
+int nl_printq(struct nl_state *, struct nl_cell, struct nl_cell *);
+int nl_setq(struct nl_state *, struct nl_cell, struct nl_cell *);
+int nl_letq(struct nl_state *, struct nl_cell, struct nl_cell *);
 void nl_state_init(struct nl_state *state) {
   state->stdout = stdout;
   state->stdin = stdin;
   state->stderr = stderr;
   state->last_err = NULL;
+  state->parent_state = NULL;
   state->symbols = malloc(sizeof(*state->symbols));
-  state->symbols->name = strdup("NIL");
+  state->symbols->name = "nil";
   state->symbols->value.type = NL_NIL;
   state->symbols->next = NULL;
+}
+void nl_state_define_builtins(struct nl_state *state) {
+  nl_state_put(state, "quote", nl_cell_as_int((int64_t)nl_quote));
+  nl_state_put(state, "printq", nl_cell_as_int((int64_t)nl_printq));
+  nl_state_put(state, "print", nl_cell_as_int((int64_t)nl_print));
+  nl_state_put(state, "setq", nl_cell_as_int((int64_t)nl_setq));
+  nl_state_put(state, "letq", nl_cell_as_int((int64_t)nl_letq));
 }
 
 int nl_skip_whitespace(struct nl_state *state) {
@@ -98,48 +145,270 @@ int nl_skip_whitespace(struct nl_state *state) {
 }
 
 int nl_read(struct nl_state *state, struct nl_cell *result) {
+  int sign = 1;
   int ch = nl_skip_whitespace(state);
-  if (isdigit(ch)) {
+  if (ch == '-') {
+    int peek = fgetc(state->stdin);
+    if (isdigit(peek)) {
+      sign = -1;
+      ch = peek;
+      goto NL_READ_DIGIT;
+    }
+    ungetc(peek, state->stdin);
+    goto NL_READ_SYMBOL;
+  } else if (isdigit(ch)) {
+    NL_READ_DIGIT:
     *result = nl_cell_as_int(ch - '0');
     while (isdigit(ch = fgetc(state->stdin))) {
       result->value.as_integer *= 10;
       result->value.as_integer += ch - '0';
     }
+    result->value.as_integer *= sign;
     ungetc(ch, state->stdin);
     return 0;
   } else if ('"' == ch) {
     state->last_err = "quoted symbols not implemented";
     return 1;
   } else if ('(' == ch) {
-    state->last_err = "lists not implemented";
-    return 1;
+    struct nl_cell head, *tail;
+    if (nl_read(state, &head)) return 1;
+    *result = nl_cell_as_pair(head, nl_cell_as_nil());
+    tail = result->value.as_pair + 1;
+    for (;;) {
+      ch = nl_skip_whitespace(state);
+      if (ch == ')') return 0;
+      if (ch == '.') {
+        if (nl_read(state, tail)) return 1;
+        if (nl_skip_whitespace(state) != ')') {
+          state->last_err = "illegal list";
+          return 1;
+        }
+        return 0;
+      }
+      ungetc(ch, state->stdin);
+      if (nl_read(state, &head)) return 1;
+      *tail = nl_cell_as_pair(head, nl_cell_as_nil());
+      tail = tail->value.as_pair + 1;
+    }
   } else {
-    state->last_err = "symbols not implemented";
-    return 1;
+    int used, allocated;
+    char *buf;
+  NL_READ_SYMBOL:
+    used = 0;
+    allocated = 16;
+    buf = malloc(sizeof(char) * allocated);
+    for (; !isspace(ch) && ch != '(' && ch != ')'; ch = fgetc(state->stdin)) {
+      buf[used++] = ch;
+      if (used == allocated) {
+        allocated *= 2;
+        buf = realloc(buf, sizeof(char) * allocated);
+      }
+    }
+    ungetc(ch, state->stdin);
+    buf[used] = '\0';
+    buf = realloc(buf, sizeof(char) * used);
+    // TODO interning, uniqing
+    *result = nl_cell_as_symbol(buf);
+    return 0;
   }
 }
 
-int nl_eval(struct nl_state *state, struct nl_cell value, struct nl_cell *result) {
-  state->last_err = "not implemented";
-  return 1;
-}
-
-void nl_print(struct nl_state *state, struct nl_cell cell) {
+int nl_eval(struct nl_state *state, struct nl_cell cell, struct nl_cell *result) {
+  struct nl_cell head, *tail;
   switch (cell.type) {
   case NL_NIL:
-    break;
+  case NL_INTEGER:
+    *result = cell;
+    return 0;
+  case NL_SYMBOL:
+    nl_state_get(state, cell.value.as_symbol, result);
+    return 0;
+  case NL_PAIR:
+    if (nl_eval(state, cell.value.as_pair[0], &head)) return 1;
+    switch (head.type) {
+    case NL_NIL:
+      state->last_err = "illegal function call: cannot invoke NIL";
+      return 1;
+    case NL_INTEGER:
+      return ((nl_native_func)head.value.as_integer)(state, cell.value.as_pair[1], result);
+    case NL_SYMBOL:
+      state->last_err = "illegal function call: cannot invoke symbol";
+      return 1;
+    case NL_PAIR:
+      // TODO this is the biggest one
+      // TODO and unquote!
+      // TODO and clean up memory leaks
+      state->last_err = "lambdas not implemented";
+      return 1;
+    default:
+      state->last_err = "unknown cell type";
+      return 1;
+    }
+}
+
+int nl_printq(struct nl_state *state, struct nl_cell cell, struct nl_cell *result) {
+  switch (cell.type) {
+  case NL_NIL:
+    *result = cell;
+    return 0;
   case NL_INTEGER:
     fprintf(state->stdout, "%li", cell.value.as_integer);
-    break;
+    *result = cell;
+    return 0;
   case NL_PAIR:
-    nl_print(state, cell.value.as_pair[0]);
-    fputc(' ', state->stdout);
-    nl_print(state, cell.value.as_pair[1]);
-    break;
+    nl_printq(state, cell.value.as_pair[0], result);
+    if (NL_NIL != cell.value.as_pair[1].type) {
+      fputc(' ', state->stdout);
+      nl_printq(state, cell.value.as_pair[1], result);
+    }
+    return 0;
   case NL_SYMBOL:
     fprintf(state->stdout, "%s", cell.value.as_symbol);
-    break;
+    *result = cell;
+    return 0;
+  default:
+    state->last_err = "unknown cell type";
+    return 1;
   }
+}
+
+int nl_print(struct nl_state *state, struct nl_cell cell, struct nl_cell *result) {
+  struct nl_cell val, *tail;
+  switch (cell.type) {
+  case NL_NIL:
+    *result = cell;
+    return 0;
+  case NL_INTEGER:
+    fprintf(state->stdout, "%li", cell.value.as_integer);
+    *result = cell;
+    return 0;
+  case NL_PAIR:
+    if (nl_eval(state, cell.value.as_pair[0], result)) return 1;
+    for (tail = &cell; tail->type == NL_PAIR; tail = tail->value.as_pair + 1) {
+      if (nl_eval(state, tail->value.as_pair[0], &val)) return 1;
+      fputc(' ', state->stdout);
+      nl_print(state, val, result);
+    }
+    if (tail->type != NL_NIL) nl_print(state, *tail, result);
+    return 0;
+  case NL_SYMBOL:
+    fprintf(state->stdout, "%s", cell.value.as_symbol);
+    *result = cell;
+    return 0;
+  default:
+    state->last_err = "unknown cell type";
+    return 1;
+  }
+}
+
+int nl_setqe(struct nl_state *target_state, struct nl_state *eval_state, struct nl_cell args, struct nl_cell *result) {
+  struct nl_cell *tail;
+  if (args.type != NL_PAIR) {
+    target_state->last_err = "illegal setq call: non-pair args";
+    return 1;
+  }
+  for (tail = &args; tail->type == NL_PAIR; tail = tail->value.as_pair[1].value.as_pair + 1) {
+    if (tail->value.as_pair[0].type != NL_SYMBOL) {
+      target_state->last_err = "illegal setq call: non-symbol var";
+      return 1;
+    }
+    if (tail->value.as_pair[1].type != NL_PAIR) {
+      if (nl_eval(eval_state, tail->value.as_pair[1], result)) return 1;
+      nl_state_put(target_state, tail->value.as_pair[0].value.as_symbol, *result);
+      return 0;
+    }
+    if (nl_eval(eval_state, tail->value.as_pair[1].value.as_pair[0], result)) return 1;
+    nl_state_put(target_state, tail->value.as_pair[0].value.as_symbol, *result);
+  }
+  return 0;
+}
+
+int nl_setq(struct nl_state *state, struct nl_cell args, struct nl_cell *result) {
+  return nl_setqe(state, state, args, result);
+}
+
+/**
+ * (letq (A 1 B 2
+ *        C 3 D 4)
+ *  (body ...)
+ *  (more-body ...))
+ *
+ * Create a symbols list for the duration, based on the current symbols list.
+ * Evaluate each value and set it to the quoted symbol, as with setq, in the first arg.
+ * Evaluate each statement in the remaining args.
+ * Discard the symbols list.
+ * Result is the last evaluated statement.
+ */
+int nl_letq(struct nl_state *state, struct nl_cell args, struct nl_cell *result) {
+  struct nl_state body_state;
+  struct nl_cell vars, body, *tail;
+  if (args.type != NL_PAIR) {
+    state->last_err = "illegal letq: non-pair args";
+    return 1;
+  }
+  vars = args.value.as_pair[0];
+  body = args.value.as_pair[1];
+  if (vars.type != NL_PAIR) {
+    state->last_err = "illegal letq: non-pair var list";
+    return 1;
+  }
+  if (body.type != NL_PAIR) {
+    state->last_err = "illegal letq: non-pair body";
+    return 1;
+  }
+  nl_state_init(&body_state);
+  if (nl_setqe(&body_state, state, vars, result)) return 1;
+  nl_state_link(&body_state, state);
+  for (tail = &body; tail->type == NL_PAIR; tail = tail->value.as_pair + 1) {
+    if (nl_eval(&body_state, tail->value.as_pair[0], result)) return 1;
+  }
+  if (tail->type != NL_NIL) return nl_eval(&body_state, *tail, result);
+  return 0;
+}
+
+int nl_write(struct nl_state *state, struct nl_cell cell, struct nl_cell *result) {
+  struct nl_cell *tail;
+  switch (cell.type) {
+  case NL_NIL:
+    fprintf(state->stdout, "nil");
+    *result = cell;
+    return 0;
+  case NL_INTEGER:
+    fprintf(state->stdout, "%li", cell.value.as_integer);
+    *result = cell;
+    return 0;
+  case NL_SYMBOL:
+    fprintf(state->stdout, "%s", cell.value.as_symbol);
+    *result = cell;
+    return 0;
+  case NL_PAIR:
+    fputc('(', state->stdout);
+    if (nl_write(state, cell.value.as_pair[0], result)) return 1;
+    tail = cell.value.as_pair + 1;
+    for (;;) {
+      switch (tail->type) {
+      case NL_NIL:
+        fputc(')', state->stdout);
+        *result = cell;
+        return 0;
+      case NL_PAIR:
+        fputc(' ', state->stdout);
+        if (nl_write(state, tail->value.as_pair[0], result)) return 1;
+        tail = tail->value.as_pair + 1;
+        break;
+      case NL_INTEGER:
+        fprintf(state->stdout, " . %li)", tail->value.as_integer);
+        return 0;
+      case NL_SYMBOL:
+        // TODO write quoted symbols
+        fprintf(state->stdout, " . %s)", tail->value.as_symbol);
+        return 0;
+      }
+    }
+  }
+  *result = cell;
+  state->last_err = "unhandled type";
+  return 1;
 }
 
 int nl_run_repl(struct nl_state *state) {
@@ -160,12 +429,14 @@ int nl_run_repl(struct nl_state *state) {
         fputs("ERROR eval\n", state->stderr);
       return 2;
     }
-    nl_print(state, last_eval);
+    fputs("\n", state->stdout);
+    nl_write(state, last_eval, &last_read);
   }
 }
 
 int main() {
   struct nl_state state;
   nl_state_init(&state);
+  nl_state_define_builtins(&state);
   return nl_run_repl(&state);
 }
