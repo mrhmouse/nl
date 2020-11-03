@@ -118,6 +118,7 @@ int nl_printq(struct nl_state *, struct nl_cell, struct nl_cell *);
 int nl_write(struct nl_state *, struct nl_cell, struct nl_cell *);
 int nl_setq(struct nl_state *, struct nl_cell, struct nl_cell *);
 int nl_letq(struct nl_state *, struct nl_cell, struct nl_cell *);
+int nl_defq(struct nl_state *, struct nl_cell, struct nl_cell *);
 void nl_state_init(struct nl_state *state) {
   state->stdout = stdout;
   state->stdin = stdin;
@@ -135,6 +136,7 @@ void nl_state_define_builtins(struct nl_state *state) {
   nl_state_put(state, "print", nl_cell_as_int((int64_t)nl_print));
   nl_state_put(state, "setq", nl_cell_as_int((int64_t)nl_setq));
   nl_state_put(state, "letq", nl_cell_as_int((int64_t)nl_letq));
+  nl_state_put(state, "defq", nl_cell_as_int((int64_t)nl_defq));
 }
 
 int nl_skip_whitespace(struct nl_state *state) {
@@ -339,6 +341,27 @@ int nl_setqe(struct nl_state *target_state, struct nl_state *eval_state, struct 
     if (nl_eval(eval_state, tail->value.as_pair[1].value.as_pair[0], result)) return 1;
     nl_state_put(target_state, tail->value.as_pair[0].value.as_symbol, *result);
   }
+  return 0;
+}
+
+
+int nl_defq(struct nl_state *state, struct nl_cell args, struct nl_cell *result) {
+  struct nl_cell name, body;
+  if (args.type != NL_PAIR) {
+    state->last_err = "illegal defq: non-pair args";
+    return 1;
+  }
+  name = args.value.as_pair[0];
+  if (name.type != NL_SYMBOL) {
+    state->last_err = "illegal defq: non-symbol name";
+    return 1;
+  }
+  body = args.value.as_pair[1];
+  if (body.type != NL_PAIR) {
+    state->last_err = "illegal defq: non-pair body";
+    return 1;
+  }
+  nl_state_put(state, name.value.as_symbol, body);
   return 0;
 }
 
