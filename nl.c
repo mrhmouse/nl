@@ -115,6 +115,7 @@ int nl_quote(struct nl_state *state, struct nl_cell cell, struct nl_cell *result
 
 int nl_print(struct nl_state *, struct nl_cell, struct nl_cell *);
 int nl_printq(struct nl_state *, struct nl_cell, struct nl_cell *);
+int nl_write(struct nl_state *, struct nl_cell, struct nl_cell *);
 int nl_setq(struct nl_state *, struct nl_cell, struct nl_cell *);
 int nl_letq(struct nl_state *, struct nl_cell, struct nl_cell *);
 void nl_state_init(struct nl_state *state) {
@@ -214,7 +215,7 @@ int nl_read(struct nl_state *state, struct nl_cell *result) {
 }
 
 int nl_eval(struct nl_state *state, struct nl_cell cell, struct nl_cell *result) {
-  struct nl_cell head, *tail;
+  struct nl_cell head, letq_tag, *args, *vars, *params;
   switch (cell.type) {
   case NL_NIL:
   case NL_INTEGER:
@@ -235,15 +236,33 @@ int nl_eval(struct nl_state *state, struct nl_cell cell, struct nl_cell *result)
       state->last_err = "illegal function call: cannot invoke symbol";
       return 1;
     case NL_PAIR:
-      // TODO this is the biggest one
-      // TODO and unquote!
-      // TODO and clean up memory leaks
-      state->last_err = "lambdas not implemented";
-      return 1;
+      if (head.value.as_pair[0].type != NL_PAIR) {
+        state->last_err = "illegal lambda call: non-pair parameter list";
+        return 1;
+      }
+      if (head.value.as_pair[1].type != NL_PAIR) {
+        state->last_err = "illegal lambda call: non-pair lambda body";
+        return 1;
+      }
+      letq_tag = nl_cell_as_pair(nl_cell_as_pair(nl_cell_as_nil(), nl_cell_as_nil()),
+                                 head.value.as_pair[1]);
+      vars = letq_tag.value.as_pair;
+      for (args = cell.value.as_pair + 1, params = head.value.as_pair;
+           args->type == NL_PAIR && params->type == NL_PAIR;
+           args = args->value.as_pair + 1, params = params->value.as_pair + 1)
+        {
+          *vars = nl_cell_as_pair(params->value.as_pair[0], nl_cell_as_pair(args->value.as_pair[0], nl_cell_as_nil()));
+          vars = vars->value.as_pair + 1;
+        }
+      return nl_letq(state, letq_tag, result);
     default:
       state->last_err = "unknown cell type";
       return 1;
     }
+  default:
+    state->last_err = "unknown cell type";
+    return 1;
+  }
 }
 
 int nl_printq(struct nl_state *state, struct nl_cell cell, struct nl_cell *result) {
