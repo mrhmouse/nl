@@ -119,6 +119,7 @@ int nl_write(struct nl_state *, struct nl_cell, struct nl_cell *);
 int nl_setq(struct nl_state *, struct nl_cell, struct nl_cell *);
 int nl_letq(struct nl_state *, struct nl_cell, struct nl_cell *);
 int nl_defq(struct nl_state *, struct nl_cell, struct nl_cell *);
+int nl_eval(struct nl_state *, struct nl_cell, struct nl_cell *);
 void nl_state_init(struct nl_state *state) {
   state->stdout = stdout;
   state->stdin = stdin;
@@ -137,6 +138,7 @@ void nl_state_define_builtins(struct nl_state *state) {
   nl_state_put(state, "setq", nl_cell_as_int((int64_t)nl_setq));
   nl_state_put(state, "letq", nl_cell_as_int((int64_t)nl_letq));
   nl_state_put(state, "defq", nl_cell_as_int((int64_t)nl_defq));
+  nl_state_put(state, "eval", nl_cell_as_int((int64_t)nl_eval));
 }
 
 int nl_skip_whitespace(struct nl_state *state) {
@@ -216,7 +218,7 @@ int nl_read(struct nl_state *state, struct nl_cell *result) {
   }
 }
 
-int nl_eval(struct nl_state *state, struct nl_cell cell, struct nl_cell *result) {
+int nl_evalq(struct nl_state *state, struct nl_cell cell, struct nl_cell *result) {
   struct nl_cell head, letq_tag, *args, *vars, *params;
   switch (cell.type) {
   case NL_NIL:
@@ -227,7 +229,7 @@ int nl_eval(struct nl_state *state, struct nl_cell cell, struct nl_cell *result)
     nl_state_get(state, cell.value.as_symbol, result);
     return 0;
   case NL_PAIR:
-    if (nl_eval(state, cell.value.as_pair[0], &head)) return 1;
+    if (nl_evalq(state, cell.value.as_pair[0], &head)) return 1;
     switch (head.type) {
     case NL_NIL:
       state->last_err = "illegal function call: cannot invoke NIL";
@@ -267,6 +269,19 @@ int nl_eval(struct nl_state *state, struct nl_cell cell, struct nl_cell *result)
   }
 }
 
+int nl_eval(struct nl_state *state, struct nl_cell cell, struct nl_cell *result) {
+  struct nl_cell *tail, form;
+  if (cell.type != NL_PAIR) {
+    state->last_err = "illegal eval: non-pair args";
+    return 1;
+  }
+  for (tail = &cell; tail->type == NL_PAIR; tail = tail->value.as_pair + 1) {
+    if (nl_evalq(state, tail->value.as_pair[0], &form)) return 1;
+    if (nl_evalq(state, form, result)) return 1;
+  }
+  return 0;
+}
+
 int nl_printq(struct nl_state *state, struct nl_cell cell, struct nl_cell *result) {
   switch (cell.type) {
   case NL_NIL:
@@ -304,9 +319,9 @@ int nl_print(struct nl_state *state, struct nl_cell cell, struct nl_cell *result
     *result = cell;
     return 0;
   case NL_PAIR:
-    if (nl_eval(state, cell.value.as_pair[0], result)) return 1;
+    if (nl_evalq(state, cell.value.as_pair[0], result)) return 1;
     for (tail = &cell; tail->type == NL_PAIR; tail = tail->value.as_pair + 1) {
-      if (nl_eval(state, tail->value.as_pair[0], &val)) return 1;
+      if (nl_evalq(state, tail->value.as_pair[0], &val)) return 1;
       fputc(' ', state->stdout);
       nl_print(state, val, result);
     }
@@ -334,11 +349,11 @@ int nl_setqe(struct nl_state *target_state, struct nl_state *eval_state, struct 
       return 1;
     }
     if (tail->value.as_pair[1].type != NL_PAIR) {
-      if (nl_eval(eval_state, tail->value.as_pair[1], result)) return 1;
+      if (nl_evalq(eval_state, tail->value.as_pair[1], result)) return 1;
       nl_state_put(target_state, tail->value.as_pair[0].value.as_symbol, *result);
       return 0;
     }
-    if (nl_eval(eval_state, tail->value.as_pair[1].value.as_pair[0], result)) return 1;
+    if (nl_evalq(eval_state, tail->value.as_pair[1].value.as_pair[0], result)) return 1;
     nl_state_put(target_state, tail->value.as_pair[0].value.as_symbol, *result);
   }
   return 0;
@@ -402,9 +417,9 @@ int nl_letq(struct nl_state *state, struct nl_cell args, struct nl_cell *result)
   if (nl_setqe(&body_state, state, vars, result)) return 1;
   nl_state_link(&body_state, state);
   for (tail = &body; tail->type == NL_PAIR; tail = tail->value.as_pair + 1) {
-    if (nl_eval(&body_state, tail->value.as_pair[0], result)) return 1;
+    if (nl_evalq(&body_state, tail->value.as_pair[0], result)) return 1;
   }
-  if (tail->type != NL_NIL) return nl_eval(&body_state, *tail, result);
+  if (tail->type != NL_NIL) return nl_evalq(&body_state, *tail, result);
   return 0;
 }
 
@@ -464,7 +479,7 @@ int nl_run_repl(struct nl_state *state) {
         fputs("ERROR read\n", state->stderr);
       return 1;
     }
-    if (nl_eval(state, last_read, &last_eval)) {
+    if (nl_evalq(state, last_read, &last_eval)) {
       if (state->last_err)
         fprintf(state->stderr, "ERROR eval: %s\n", state->last_err);
       else
