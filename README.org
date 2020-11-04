@@ -1,0 +1,34 @@
+#+TITLE: nl
+#+AUTHOR: Jordan <jordan@yonder.computer>
+
+=nl= is an _unfinished_ interpreted Lisp-1 with only a few
+datatypes and builtins. at the core, like many homebrew Lisps,
+the most basic storage type is the cell. the cell can be an
+integer, a symbol, a pair of cells, or the special value =nil=.
+
+higher-level data structures are built from cells, which are
+composed through pairs. 
+
+* TODO
+** it leaks
+   there's not a single =free= call in =nl.c=, so it definitely
+   leaks garbage all over the place. at the very least, it shouldn't
+   leak symbols when a match is found; the dupe should be cleaned
+   up at that point, favoring the one in memory already.
+
+   beyond that, there's no garbage collector for unreachable data
+   within the language. each cell should be collected as it is returned
+   from =eval= in the top-level _REPL_
+** no quoted symbols
+   we need a way to write quoted symbols and have them evaluate
+   to themselves by default. it's already possible to set a symbol
+   value to another symbol, so this shouldn't be hard
+
+   we also can't print quoted symbols yet, so we need to fix that
+   before considering this complete
+** needs a set of core builtins
+   must decide on a minimal set of builtins to provide
+** needs a standard library
+   outside of the builtins, must provide a standard library
+   with functions for building real applications, e.g. HTML
+   generation libraries, data structures built on cells, etc.
