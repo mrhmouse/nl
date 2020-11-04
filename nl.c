@@ -4,13 +4,6 @@
 #include <stdio.h>
 #include <string.h>
 
-// nl
-// not lisp
-// new lisp
-// 'nother lisp
-// nano lisp
-// nil lisp
-
 struct nl_cell {
   enum {
         NL_NIL,
@@ -62,43 +55,6 @@ struct nl_cell nl_cell_as_symbol(char *interned_symbol) {
   c.value.as_symbol = interned_symbol;
   return c;
 }
-
-void nl_state_put(struct nl_state *state, const char *name, struct nl_cell value) {
-  int match = 0;
-  struct nl_symbols *s, *l;
-  for (; state != NULL; state = state->parent_state) {
-    for (s = state->symbols; s != NULL; s = s->next) {
-      l = s;
-      if (0 == strcmp(name, s->name)) {
-        match = 1;
-        break;
-      }
-    }
-    if (match) break;
-  }
-  if (!match) {
-    l->next = malloc(sizeof(*l->next));
-    l->next->name = strdup(name);
-    l = l->next;
-  }
-  l->value = value;
-}
-void nl_state_get(struct nl_state *state, const char *name, struct nl_cell *result) {
-  struct nl_symbols *s;
-  for (s = state->symbols; s != NULL; s = s->next)
-    if (0 == strcmp(name, s->name)) {
-      *result = s->value;
-      return;
-    }
-  if (state->parent_state) nl_state_get(state->parent_state, name, result);
-  else *result = nl_cell_as_nil();
-}
-void nl_state_link(struct nl_state *child, struct nl_state *parent) {
-  child->stdout = parent->stdout;
-  child->stdin = parent->stdin;
-  child->stderr = parent->stderr;
-  child->parent_state = parent;
-}
 void nl_state_init(struct nl_state *state) {
   state->stdout = stdout;
   state->stdin = stdin;
@@ -109,28 +65,6 @@ void nl_state_init(struct nl_state *state) {
   state->symbols->name = "nil";
   state->symbols->value.type = NL_NIL;
   state->symbols->next = NULL;
-}
-
-#define NL_BUILTIN(name) int nl_ ## name(struct nl_state *state, struct nl_cell cell, struct nl_cell *result)
-NL_BUILTIN(quote) {
-  *result = cell;
-  return 0;
-}
-NL_BUILTIN(print);
-NL_BUILTIN(printq);
-NL_BUILTIN(write);
-NL_BUILTIN(setq);
-NL_BUILTIN(letq);
-NL_BUILTIN(defq);
-NL_BUILTIN(eval);
-void nl_state_define_builtins(struct nl_state *state) {
-  nl_state_put(state, "quote", nl_cell_as_int((int64_t)nl_quote));
-  nl_state_put(state, "printq", nl_cell_as_int((int64_t)nl_printq));
-  nl_state_put(state, "print", nl_cell_as_int((int64_t)nl_print));
-  nl_state_put(state, "setq", nl_cell_as_int((int64_t)nl_setq));
-  nl_state_put(state, "letq", nl_cell_as_int((int64_t)nl_letq));
-  nl_state_put(state, "defq", nl_cell_as_int((int64_t)nl_defq));
-  nl_state_put(state, "eval", nl_cell_as_int((int64_t)nl_eval));
 }
 
 int nl_skip_whitespace(struct nl_state *state) {
@@ -209,6 +143,49 @@ int nl_read(struct nl_state *state, struct nl_cell *result) {
   }
 }
 
+void nl_state_put(struct nl_state *state, const char *name, struct nl_cell value) {
+  int match = 0;
+  struct nl_symbols *s, *l;
+  for (; state != NULL; state = state->parent_state) {
+    for (s = state->symbols; s != NULL; s = s->next) {
+      l = s;
+      if (0 == strcmp(name, s->name)) {
+        match = 1;
+        break;
+      }
+    }
+    if (match) break;
+  }
+  if (!match) {
+    l->next = malloc(sizeof(*l->next));
+    l->next->name = strdup(name);
+    l = l->next;
+  }
+  l->value = value;
+}
+void nl_state_get(struct nl_state *state, const char *name, struct nl_cell *result) {
+  struct nl_symbols *s;
+  for (s = state->symbols; s != NULL; s = s->next)
+    if (0 == strcmp(name, s->name)) {
+      *result = s->value;
+      return;
+    }
+  if (state->parent_state) nl_state_get(state->parent_state, name, result);
+  else *result = nl_cell_as_nil();
+}
+void nl_state_link(struct nl_state *child, struct nl_state *parent) {
+  child->stdout = parent->stdout;
+  child->stdin = parent->stdin;
+  child->stderr = parent->stderr;
+  child->parent_state = parent;
+}
+
+#define NL_BUILTIN(name) int nl_ ## name(struct nl_state *state, struct nl_cell cell, struct nl_cell *result)
+NL_BUILTIN(quote) {
+  *result = cell;
+  return 0;
+}
+NL_BUILTIN(letq);
 NL_BUILTIN(evalq) {
   struct nl_cell head, letq_tag, *args, *vars, *params;
   switch (cell.type) {
@@ -259,7 +236,6 @@ NL_BUILTIN(evalq) {
     return 1;
   }
 }
-
 NL_BUILTIN(eval) {
   struct nl_cell *tail, form;
   if (cell.type != NL_PAIR) {
@@ -272,7 +248,6 @@ NL_BUILTIN(eval) {
   }
   return 0;
 }
-
 NL_BUILTIN(printq) {
   switch (cell.type) {
   case NL_NIL:
@@ -298,7 +273,6 @@ NL_BUILTIN(printq) {
     return 1;
   }
 }
-
 NL_BUILTIN(print) {
   struct nl_cell val, *tail;
   switch (cell.type) {
@@ -327,7 +301,25 @@ NL_BUILTIN(print) {
     return 1;
   }
 }
-
+NL_BUILTIN(defq) {
+  struct nl_cell name, body;
+  if (cell.type != NL_PAIR) {
+    state->last_err = "illegal defq: non-pair args";
+    return 1;
+  }
+  name = cell.value.as_pair[0];
+  if (name.type != NL_SYMBOL) {
+    state->last_err = "illegal defq: non-symbol name";
+    return 1;
+  }
+  body = cell.value.as_pair[1];
+  if (body.type != NL_PAIR) {
+    state->last_err = "illegal defq: non-pair body";
+    return 1;
+  }
+  nl_state_put(state, name.value.as_symbol, body);
+  return 0;
+}
 int nl_setqe(struct nl_state *target_state, struct nl_state *eval_state, struct nl_cell args, struct nl_cell *result) {
   struct nl_cell *tail;
   if (args.type != NL_PAIR) {
@@ -349,32 +341,9 @@ int nl_setqe(struct nl_state *target_state, struct nl_state *eval_state, struct 
   }
   return 0;
 }
-
-
-NL_BUILTIN(defq) {
-  struct nl_cell name, body;
-  if (cell.type != NL_PAIR) {
-    state->last_err = "illegal defq: non-pair args";
-    return 1;
-  }
-  name = cell.value.as_pair[0];
-  if (name.type != NL_SYMBOL) {
-    state->last_err = "illegal defq: non-symbol name";
-    return 1;
-  }
-  body = cell.value.as_pair[1];
-  if (body.type != NL_PAIR) {
-    state->last_err = "illegal defq: non-pair body";
-    return 1;
-  }
-  nl_state_put(state, name.value.as_symbol, body);
-  return 0;
-}
-
 NL_BUILTIN(setq) {
   return nl_setqe(state, state, cell, result);
 }
-
 /**
  * (letq (A 1 B 2
  *        C 3 D 4)
@@ -413,7 +382,6 @@ NL_BUILTIN(letq) {
   if (tail->type != NL_NIL) return nl_evalq(&body_state, *tail, result);
   return 0;
 }
-
 NL_BUILTIN(write) {
   struct nl_cell *tail;
   switch (cell.type) {
@@ -458,6 +426,15 @@ NL_BUILTIN(write) {
   state->last_err = "unhandled type";
   return 1;
 }
+void nl_state_define_builtins(struct nl_state *state) {
+  nl_state_put(state, "quote", nl_cell_as_int((int64_t)nl_quote));
+  nl_state_put(state, "printq", nl_cell_as_int((int64_t)nl_printq));
+  nl_state_put(state, "print", nl_cell_as_int((int64_t)nl_print));
+  nl_state_put(state, "setq", nl_cell_as_int((int64_t)nl_setq));
+  nl_state_put(state, "letq", nl_cell_as_int((int64_t)nl_letq));
+  nl_state_put(state, "defq", nl_cell_as_int((int64_t)nl_defq));
+  nl_state_put(state, "eval", nl_cell_as_int((int64_t)nl_eval));
+}
 
 int nl_run_repl(struct nl_state *state) {
   struct nl_cell last_read, last_eval;
@@ -481,7 +458,6 @@ int nl_run_repl(struct nl_state *state) {
     nl_write(state, last_eval, &last_read);
   }
 }
-
 int main() {
   struct nl_state state;
   nl_state_init(&state);
