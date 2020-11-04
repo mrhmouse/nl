@@ -33,6 +33,14 @@ composed through pairs.
    with functions for building real applications, e.g. HTML
    generation libraries, data structures built on cells, test
    frameworks, etc..
+** needs support for single-quote syntax
+   special reader syntax ='foo= should evaluate to =(quote . foo)=,
+   while ='(1 2 3 4)= should evaluate to =(quote 1 2 3 4)=
+** needs unquote operator
+   unsure if this should work with the standard =quote= or if
+   it should require the use of =quasiquote=. need both a single-item
+   and a splicing version, e.g. ='(1 2 ,(+ 1 2))= should produce the list
+   =(1 2 3)= while ='(1 2 `(range 3 5))= should produce =(1 2 3 4 5)=
 * Dependencies
   #+BEGIN_SRC c :tangle nl.c
     #include <ctype.h>
