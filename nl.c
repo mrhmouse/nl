@@ -24,33 +24,30 @@ struct nl_cell {
     struct nl_cell *as_pair;
   } value;
 };
-
 struct nl_symbols {
   char *name;
   struct nl_cell value;
   struct nl_symbols *next;
 };
-
 struct nl_state {
   FILE *stdout, *stdin, *stderr;
   char *last_err;
   struct nl_symbols *symbols;
   struct nl_state *parent_state;
 };
+typedef int (*nl_native_func)(struct nl_state *, struct nl_cell, struct nl_cell *result);
 
 struct nl_cell nl_cell_as_nil() {
   struct nl_cell c;
   c.type = NL_NIL;
   return c;
 }
-
 struct nl_cell nl_cell_as_int(int64_t value) {
   struct nl_cell c;
   c.type = NL_INTEGER;
   c.value.as_integer = value;
   return c;
 }
-
 struct nl_cell nl_cell_as_pair(struct nl_cell head, struct nl_cell tail) {
   struct nl_cell c;
   c.type = NL_PAIR;
@@ -59,15 +56,12 @@ struct nl_cell nl_cell_as_pair(struct nl_cell head, struct nl_cell tail) {
   c.value.as_pair[1] = tail;
   return c;
 }
-
 struct nl_cell nl_cell_as_symbol(char *interned_symbol) {
   struct nl_cell c;
   c.type = NL_SYMBOL;
   c.value.as_symbol = interned_symbol;
   return c;
 }
-
-typedef int (*nl_native_func)(struct nl_state *, struct nl_cell, struct nl_cell *result);
 
 void nl_state_put(struct nl_state *state, const char *name, struct nl_cell value) {
   int match = 0;
@@ -89,7 +83,6 @@ void nl_state_put(struct nl_state *state, const char *name, struct nl_cell value
   }
   l->value = value;
 }
-
 void nl_state_get(struct nl_state *state, const char *name, struct nl_cell *result) {
   struct nl_symbols *s;
   for (s = state->symbols; s != NULL; s = s->next)
@@ -100,26 +93,12 @@ void nl_state_get(struct nl_state *state, const char *name, struct nl_cell *resu
   if (state->parent_state) nl_state_get(state->parent_state, name, result);
   else *result = nl_cell_as_nil();
 }
-
 void nl_state_link(struct nl_state *child, struct nl_state *parent) {
   child->stdout = parent->stdout;
   child->stdin = parent->stdin;
   child->stderr = parent->stderr;
   child->parent_state = parent;
 }
-
-int nl_quote(struct nl_state *state, struct nl_cell cell, struct nl_cell *result) {
-  *result = cell;
-  return 0;
-}
-
-int nl_print(struct nl_state *, struct nl_cell, struct nl_cell *);
-int nl_printq(struct nl_state *, struct nl_cell, struct nl_cell *);
-int nl_write(struct nl_state *, struct nl_cell, struct nl_cell *);
-int nl_setq(struct nl_state *, struct nl_cell, struct nl_cell *);
-int nl_letq(struct nl_state *, struct nl_cell, struct nl_cell *);
-int nl_defq(struct nl_state *, struct nl_cell, struct nl_cell *);
-int nl_eval(struct nl_state *, struct nl_cell, struct nl_cell *);
 void nl_state_init(struct nl_state *state) {
   state->stdout = stdout;
   state->stdin = stdin;
@@ -131,6 +110,19 @@ void nl_state_init(struct nl_state *state) {
   state->symbols->value.type = NL_NIL;
   state->symbols->next = NULL;
 }
+
+#define NL_BUILTIN(name) int nl_ ## name(struct nl_state *state, struct nl_cell cell, struct nl_cell *result)
+NL_BUILTIN(quote) {
+  *result = cell;
+  return 0;
+}
+NL_BUILTIN(print);
+NL_BUILTIN(printq);
+NL_BUILTIN(write);
+NL_BUILTIN(setq);
+NL_BUILTIN(letq);
+NL_BUILTIN(defq);
+NL_BUILTIN(eval);
 void nl_state_define_builtins(struct nl_state *state) {
   nl_state_put(state, "quote", nl_cell_as_int((int64_t)nl_quote));
   nl_state_put(state, "printq", nl_cell_as_int((int64_t)nl_printq));
@@ -148,7 +140,6 @@ int nl_skip_whitespace(struct nl_state *state) {
   } while (isspace(ch));
   return ch;
 }
-
 int nl_read(struct nl_state *state, struct nl_cell *result) {
   int sign = 1;
   int ch = nl_skip_whitespace(state);
@@ -218,7 +209,7 @@ int nl_read(struct nl_state *state, struct nl_cell *result) {
   }
 }
 
-int nl_evalq(struct nl_state *state, struct nl_cell cell, struct nl_cell *result) {
+NL_BUILTIN(evalq) {
   struct nl_cell head, letq_tag, *args, *vars, *params;
   switch (cell.type) {
   case NL_NIL:
@@ -269,7 +260,7 @@ int nl_evalq(struct nl_state *state, struct nl_cell cell, struct nl_cell *result
   }
 }
 
-int nl_eval(struct nl_state *state, struct nl_cell cell, struct nl_cell *result) {
+NL_BUILTIN(eval) {
   struct nl_cell *tail, form;
   if (cell.type != NL_PAIR) {
     state->last_err = "illegal eval: non-pair args";
@@ -282,7 +273,7 @@ int nl_eval(struct nl_state *state, struct nl_cell cell, struct nl_cell *result)
   return 0;
 }
 
-int nl_printq(struct nl_state *state, struct nl_cell cell, struct nl_cell *result) {
+NL_BUILTIN(printq) {
   switch (cell.type) {
   case NL_NIL:
     *result = cell;
@@ -308,7 +299,7 @@ int nl_printq(struct nl_state *state, struct nl_cell cell, struct nl_cell *resul
   }
 }
 
-int nl_print(struct nl_state *state, struct nl_cell cell, struct nl_cell *result) {
+NL_BUILTIN(print) {
   struct nl_cell val, *tail;
   switch (cell.type) {
   case NL_NIL:
@@ -360,18 +351,18 @@ int nl_setqe(struct nl_state *target_state, struct nl_state *eval_state, struct 
 }
 
 
-int nl_defq(struct nl_state *state, struct nl_cell args, struct nl_cell *result) {
+NL_BUILTIN(defq) {
   struct nl_cell name, body;
-  if (args.type != NL_PAIR) {
+  if (cell.type != NL_PAIR) {
     state->last_err = "illegal defq: non-pair args";
     return 1;
   }
-  name = args.value.as_pair[0];
+  name = cell.value.as_pair[0];
   if (name.type != NL_SYMBOL) {
     state->last_err = "illegal defq: non-symbol name";
     return 1;
   }
-  body = args.value.as_pair[1];
+  body = cell.value.as_pair[1];
   if (body.type != NL_PAIR) {
     state->last_err = "illegal defq: non-pair body";
     return 1;
@@ -380,8 +371,8 @@ int nl_defq(struct nl_state *state, struct nl_cell args, struct nl_cell *result)
   return 0;
 }
 
-int nl_setq(struct nl_state *state, struct nl_cell args, struct nl_cell *result) {
-  return nl_setqe(state, state, args, result);
+NL_BUILTIN(setq) {
+  return nl_setqe(state, state, cell, result);
 }
 
 /**
@@ -396,15 +387,15 @@ int nl_setq(struct nl_state *state, struct nl_cell args, struct nl_cell *result)
  * Discard the symbols list.
  * Result is the last evaluated statement.
  */
-int nl_letq(struct nl_state *state, struct nl_cell args, struct nl_cell *result) {
+NL_BUILTIN(letq) {
   struct nl_state body_state;
   struct nl_cell vars, body, *tail;
-  if (args.type != NL_PAIR) {
+  if (cell.type != NL_PAIR) {
     state->last_err = "illegal letq: non-pair args";
     return 1;
   }
-  vars = args.value.as_pair[0];
-  body = args.value.as_pair[1];
+  vars = cell.value.as_pair[0];
+  body = cell.value.as_pair[1];
   if (vars.type != NL_PAIR) {
     state->last_err = "illegal letq: non-pair var list";
     return 1;
@@ -423,7 +414,7 @@ int nl_letq(struct nl_state *state, struct nl_cell args, struct nl_cell *result)
   return 0;
 }
 
-int nl_write(struct nl_state *state, struct nl_cell cell, struct nl_cell *result) {
+NL_BUILTIN(write) {
   struct nl_cell *tail;
   switch (cell.type) {
   case NL_NIL:
