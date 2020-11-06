@@ -310,6 +310,7 @@ composed through pairs.
     NL_BUILTIN(printq) {
       switch (cell.type) {
       case NL_NIL:
+        fprintf(state->stdout, "nil");
         ,*result = cell;
         return 0;
       case NL_INTEGER:
@@ -334,34 +335,21 @@ composed through pairs.
     }
     NL_BUILTIN(print) {
       struct nl_cell val, *tail;
-      switch (cell.type) {
-      case NL_NIL:
-        ,*result = cell;
-        return 0;
-      case NL_INTEGER:
-        fprintf(state->stdout, "%li", cell.value.as_integer);
-        ,*result = cell;
-        return 0;
-      case NL_PAIR:
-        if (nl_evalq(state, cell.value.as_pair[0], result)) return 1;
-        for (tail = &cell; tail->type == NL_PAIR; tail = tail->value.as_pair + 1) {
-          if (nl_evalq(state, tail->value.as_pair[0], &val)) return 1;
-          fputc(' ', state->stdout);
-          nl_print(state, val, result);
-        }
-        if (tail->type != NL_NIL) nl_print(state, *tail, result);
-        return 0;
-      case NL_SYMBOL:
-        fprintf(state->stdout, "%s", cell.value.as_symbol);
-        ,*result = cell;
-        return 0;
-      default:
-        state->last_err = "unknown cell type";
-        return 1;
+      if (cell.type != NL_PAIR)
+        return nl_evalq(state, cell, result) || nl_printq(state, cell, result);
+      for (tail = &cell; tail->type == NL_PAIR; tail = tail->value.as_pair + 1) {
+        if (nl_evalq(state, tail->value.as_pair[0], &val)) return 1;
+        if (nl_print(state, val, result)) return 1;
+        if (tail->value.as_pair[1].type == NL_PAIR) fputc(' ', state->stdout);
+      }
+      if (tail->type != NL_NIL) {
+        fprintf(state->stdout, ", ");
+        nl_print(state, *tail, result);
       }
     }
     NL_BUILTIN(defq) {
       struct nl_cell name, body;
+      ,*result = nl_cell_as_nil();
       if (cell.type != NL_PAIR) {
         state->last_err = "illegal defq: non-pair args";
         return 1;
