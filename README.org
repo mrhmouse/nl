@@ -41,16 +41,20 @@ composed through pairs.
    it should require the use of =quasiquote=. need both a single-item
    and a splicing version, e.g. ='(1 2 ,(+ 1 2))= should produce the list
    =(1 2 3)= while ='(1 2 `(range 3 5))= should produce =(1 2 3 4 5)=
-* Dependencies
-  #+BEGIN_SRC c :tangle nl.c
+* Source
+  :PROPERTIES:
+  :header-args:C: :tangle src/nl.c
+  :END:
+** Dependencies
+  #+BEGIN_SRC c
     #include <ctype.h>
     #include <stdint.h>
     #include <stdlib.h>
     #include <stdio.h>
     #include <string.h>
   #+END_SRC
-* Structures and Typedefs
-  #+BEGIN_SRC c :tangle nl.c
+** Structures and Typedefs
+  #+BEGIN_SRC c
     struct nl_cell {
       enum {
             NL_NIL,
@@ -77,8 +81,8 @@ composed through pairs.
     };
     typedef int (*nl_native_func)(struct nl_state *, struct nl_cell, struct nl_cell *result);
   #+END_SRC
-* Constructors and Initializers
-  #+BEGIN_SRC c :tangle nl.c
+** Constructors and Initializers
+  #+BEGIN_SRC c
     struct nl_cell nl_cell_as_nil() {
       struct nl_cell c;
       c.type = NL_NIL;
@@ -116,8 +120,8 @@ composed through pairs.
       state->symbols->next = NULL;
     }
   #+END_SRC
-* Reading Data from Input
-  #+BEGIN_SRC c :tangle nl.c
+** Reading Data from Input
+  #+BEGIN_SRC c
     int nl_skip_whitespace(struct nl_state *state) {
       int ch;
       do {
@@ -194,8 +198,8 @@ composed through pairs.
       }
     }
   #+END_SRC
-* Working with State
-  #+BEGIN_SRC c :tangle nl.c
+** Working with State
+  #+BEGIN_SRC c
     void nl_state_put(struct nl_state *state, const char *name, struct nl_cell value) {
       int match = 0;
       struct nl_symbols *s, *l;
@@ -233,8 +237,8 @@ composed through pairs.
       child->parent_state = parent;
     }
   #+END_SRC
-* Language Builtins
-  #+BEGIN_SRC c :tangle nl.c
+** Language Builtins
+  #+BEGIN_SRC c
     #define NL_BUILTIN(name) int nl_ ## name(struct nl_state *state, struct nl_cell cell, struct nl_cell *result)
     NL_BUILTIN(quote) {
       ,*result = cell;
@@ -491,8 +495,8 @@ composed through pairs.
       nl_state_put(state, "eval", nl_cell_as_int((int64_t)nl_eval));
     }
   #+END_SRC
-* Main REPL
-  #+BEGIN_SRC c :tangle nl.c
+** Main REPL
+  #+BEGIN_SRC c
       int nl_run_repl(struct nl_state *state) {
       struct nl_cell last_read, last_eval;
       for (;;) {
@@ -522,3 +526,9 @@ composed through pairs.
       return nl_run_repl(&state);
     }
   #+END_SRC
+* Compiling
+  #+BEGIN_SRC shell
+    gcc -g -Wall src/nl.c -o bin/nl
+  #+END_SRC
+
+  #+RESULTS:
