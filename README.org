@@ -130,8 +130,8 @@ composed through pairs.
       return ch;
     }
     int nl_read(struct nl_state *state, struct nl_cell *result) {
-      int sign = 1;
-      int ch = nl_skip_whitespace(state);
+      struct nl_cell head, *tail;
+      int sign = 1, ch = nl_skip_whitespace(state);
       if (ch == '-') {
         int peek = fgetc(state->stdin);
         if (isdigit(peek)) {
@@ -154,8 +154,21 @@ composed through pairs.
       } else if ('"' == ch) {
         state->last_err = "quoted symbols not implemented";
         return 1;
+      } else if ('\'' == ch) {
+        if (nl_read(state, &head)) return 1;
+        ,*result = nl_cell_as_pair(nl_cell_as_symbol("quote"), head);
+        return 0;
+      } else if (',' == ch) {
+        if (nl_read(state, &head)) return 1;
+        ,*result = nl_cell_as_pair(nl_cell_as_symbol("unquote"), head);
+        return 0;
       } else if ('(' == ch) {
-        struct nl_cell head, *tail;
+        ch = nl_skip_whitespace(state);
+        if (ch == ')') {
+          ,*result = nl_cell_as_nil();
+          return 0;
+        }
+        ungetc(ch, state->stdin);
         if (nl_read(state, &head)) return 1;
         ,*result = nl_cell_as_pair(head, nl_cell_as_nil());
         tail = result->value.as_pair + 1;
