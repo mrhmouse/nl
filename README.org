@@ -269,8 +269,8 @@ composed through pairs.
       }
     }
     NL_BUILTIN(letq);
+    NL_BUILTIN(call);
     NL_BUILTIN(evalq) {
-      struct nl_cell head, letq_tag, *args, *vars, *params;
       switch (cell.type) {
       case NL_NIL:
       case NL_INTEGER:
@@ -280,40 +280,44 @@ composed through pairs.
         nl_state_get(state, cell.value.as_symbol, result);
         return 0;
       case NL_PAIR:
-        if (nl_evalq(state, cell.value.as_pair[0], &head)) return 1;
-        switch (head.type) {
-        case NL_NIL:
-          state->last_err = "illegal function call: cannot invoke NIL";
-          return 1;
-        case NL_INTEGER:
-          return ((nl_native_func)head.value.as_integer)(state, cell.value.as_pair[1], result);
-        case NL_SYMBOL:
-          state->last_err = "illegal function call: cannot invoke symbol";
-          return 1;
-        case NL_PAIR:
-          if (head.value.as_pair[0].type != NL_PAIR) {
-            state->last_err = "illegal lambda call: non-pair parameter list";
-            return 1;
-          }
-          if (head.value.as_pair[1].type != NL_PAIR) {
-            state->last_err = "illegal lambda call: non-pair lambda body";
-            return 1;
-          }
-          letq_tag = nl_cell_as_pair(nl_cell_as_pair(nl_cell_as_nil(), nl_cell_as_nil()),
-                                     head.value.as_pair[1]);
-          vars = letq_tag.value.as_pair;
-          for (args = cell.value.as_pair + 1, params = head.value.as_pair;
-               args->type == NL_PAIR && params->type == NL_PAIR;
-               args = args->value.as_pair + 1, params = params->value.as_pair + 1)
-            {
-              ,*vars = nl_cell_as_pair(params->value.as_pair[0], nl_cell_as_pair(args->value.as_pair[0], nl_cell_as_nil()));
-              vars = vars->value.as_pair + 1;
-            }
-          return nl_letq(state, letq_tag, result);
-        default:
-          state->last_err = "unknown cell type";
+        return nl_call(state, cell, result);
+      default:
+        state->last_err = "unknown cell type";
+        return 1;
+      }
+    }
+    NL_BUILTIN(call) {
+      struct nl_cell head, letq_tag, *args, *vars, *params;
+      if (nl_evalq(state, cell.value.as_pair[0], &head)) return 1;
+      switch (head.type) {
+      case NL_NIL:
+        state->last_err = "illegal function call: cannot invoke nil";
+        return 1;
+      case NL_INTEGER:
+        return ((nl_native_func)head.value.as_integer)(state, cell.value.as_pair[1], result);
+      case NL_SYMBOL:
+        state->last_err = "illegal function call: cannot invoke symbol";
+        return 1;
+      case NL_PAIR:
+        if (head.value.as_pair[0].type != NL_PAIR) {
+          state->last_err = "illegal lambda call: non-pair parameter list";
           return 1;
         }
+        if (head.value.as_pair[1].type != NL_PAIR) {
+          state->last_err = "illegal lambda call: non-pair lambda body";
+          return 1;
+        }
+        letq_tag = nl_cell_as_pair(nl_cell_as_pair(nl_cell_as_nil(), nl_cell_as_nil()),
+                                   head.value.as_pair[1]);
+        vars = letq_tag.value.as_pair;
+        for (args = cell.value.as_pair + 1, params = head.value.as_pair;
+             args->type == NL_PAIR && params->type == NL_PAIR;
+             args = args->value.as_pair + 1, params = params->value.as_pair + 1)
+          {
+            ,*vars = nl_cell_as_pair(params->value.as_pair[0], nl_cell_as_pair(args->value.as_pair[0], nl_cell_as_nil()));
+            vars = vars->value.as_pair + 1;
+          }
+        return nl_letq(state, letq_tag, result);
       default:
         state->last_err = "unknown cell type";
         return 1;
