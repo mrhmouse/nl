@@ -257,6 +257,17 @@ composed through pairs.
       ,*result = cell;
       return 0;
     }
+    int nl_cell_equal(struct nl_cell a, struct nl_cell b) {
+      if (a.type != b.type) return 0;
+      switch (a.type) {
+      case NL_NIL: return 1;
+      case NL_INTEGER: return a.value.as_integer == b.value.as_integer;
+      case NL_SYMBOL: return 0 == strcmp(a.value.as_symbol, b.value.as_symbol);
+      case NL_PAIR: return nl_cell_equal(a.value.as_pair[0], b.value.as_pair[0])
+          && nl_cell_equal(a.value.as_pair[1], b.value.as_pair[1]);
+      default: return 0;
+      }
+    }
     NL_BUILTIN(letq);
     NL_BUILTIN(evalq) {
       struct nl_cell head, letq_tag, *args, *vars, *params;
