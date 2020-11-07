@@ -335,36 +335,42 @@ composed through pairs.
         state->last_err = "illegal function call: cannot invoke symbol";
         return 1;
       case NL_PAIR:
-        if (head.value.as_pair[0].type != NL_PAIR) {
-          state->last_err = "illegal lambda call: non-pair parameter list";
-          return 1;
-        }
         if (head.value.as_pair[1].type != NL_PAIR) {
           state->last_err = "illegal lambda call: non-pair lambda body";
           return 1;
         }
-        letq_tag = nl_cell_as_pair(nl_cell_as_pair(nl_cell_as_nil(), nl_cell_as_nil()),
-                                   head.value.as_pair[1]);
+        letq_tag = nl_cell_as_pair(nl_cell_as_pair(nl_cell_as_nil(), nl_cell_as_nil()), head.value.as_pair[1]);
         vars = letq_tag.value.as_pair;
-        args = cell.value.as_pair + 1;
-        params = head.value.as_pair;
-        for (;;) {
-          if (args->type != NL_PAIR || params->type != NL_PAIR) {
-            // out of args or params
-            while (params->type == NL_PAIR) {
-              vars->value.as_pair[0] = params->value.as_pair[0];
-              vars->value.as_pair[1] = nl_cell_as_pair(nl_cell_as_nil(), nl_cell_as_pair(nl_cell_as_nil(), nl_cell_as_nil()));
-              vars = vars->value.as_pair[1].value.as_pair + 1;
-              params = params->value.as_pair + 1;
+        switch (head.value.as_pair[0].type) {
+        case NL_PAIR:
+          args = cell.value.as_pair + 1;
+          params = head.value.as_pair;
+          for (;;) {
+            if (args->type != NL_PAIR || params->type != NL_PAIR) {
+              // out of args or params
+              while (params->type == NL_PAIR) {
+                vars->value.as_pair[0] = params->value.as_pair[0];
+                vars->value.as_pair[1] = nl_cell_as_pair(nl_cell_as_nil(), nl_cell_as_pair(nl_cell_as_nil(), nl_cell_as_nil()));
+                vars = vars->value.as_pair[1].value.as_pair + 1;
+                params = params->value.as_pair + 1;
+              }
+              ,*vars = nl_cell_as_nil();
+              return nl_letq(state, letq_tag, result);
             }
-            ,*vars = nl_cell_as_nil();
-            return nl_letq(state, letq_tag, result);
+            vars->value.as_pair[0] = params->value.as_pair[0];
+            vars->value.as_pair[1] = nl_cell_as_pair(args->value.as_pair[0], nl_cell_as_pair(nl_cell_as_nil(), nl_cell_as_nil()));
+            vars = vars->value.as_pair[1].value.as_pair + 1;
+            args = args->value.as_pair + 1;
+            params = params->value.as_pair + 1;
           }
-          vars->value.as_pair[0] = params->value.as_pair[0];
-          vars->value.as_pair[1] = nl_cell_as_pair(args->value.as_pair[0], nl_cell_as_pair(nl_cell_as_nil(), nl_cell_as_nil()));
-          vars = vars->value.as_pair[1].value.as_pair + 1;
-          args = args->value.as_pair + 1;
-          params = params->value.as_pair + 1;
+        case NL_SYMBOL:
+          vars->value.as_pair[0] = head.value.as_pair[0];
+          vars->value.as_pair[1] = nl_cell_as_pair(nl_cell_as_pair(nl_cell_as_symbol("quote"), cell.value.as_pair[1]),
+                                                   nl_cell_as_nil());
+          return nl_letq(state, letq_tag, result);
+        default:
+          state->last_err = "illegal lambda call: non-pair parameter list";
+          return 1;
         }
       default:
         state->last_err = "unknown cell type";
