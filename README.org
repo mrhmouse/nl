@@ -653,7 +653,7 @@ composed through pairs.
   #+END_SRC
 * Compiling
   #+BEGIN_SRC shell
-  gcc -g -Wall src/nl.c -o bin/nl
+  gcc -Wall src/nl.c -o bin/nl
   #+END_SRC
 
   #+RESULTS:
