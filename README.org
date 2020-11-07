@@ -447,7 +447,7 @@ composed through pairs.
         return nl_evalq(state, cell, result) || nl_printq(state, cell, result);
       for (tail = &cell; tail->type == NL_PAIR; tail = tail->value.as_pair + 1) {
         if (nl_evalq(state, tail->value.as_pair[0], &val)) return 1;
-        if (nl_print(state, val, result)) return 1;
+        if (nl_printq(state, val, result)) return 1;
         if (tail->value.as_pair[1].type == NL_PAIR) fputc(' ', state->stdout);
       }
       if (tail->type != NL_NIL) {
