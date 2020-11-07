@@ -644,7 +644,7 @@ composed through pairs.
       if (tail->type != NL_NIL) return nl_evalq(&body_state, *tail, result);
       return 0;
     }
-    NL_BUILTIN(write) {
+    NL_BUILTIN(writeq) {
       struct nl_cell *tail;
       switch (cell.type) {
       case NL_NIL:
@@ -661,7 +661,7 @@ composed through pairs.
         return 0;
       case NL_PAIR:
         fputc('(', state->stdout);
-        if (nl_write(state, cell.value.as_pair[0], result)) return 1;
+        if (nl_writeq(state, cell.value.as_pair[0], result)) return 1;
         tail = cell.value.as_pair + 1;
         for (;;) {
           switch (tail->type) {
@@ -671,7 +671,7 @@ composed through pairs.
             return 0;
           case NL_PAIR:
             fputc(' ', state->stdout);
-            if (nl_write(state, tail->value.as_pair[0], result)) return 1;
+            if (nl_writeq(state, tail->value.as_pair[0], result)) return 1;
             tail = tail->value.as_pair + 1;
             break;
           case NL_INTEGER:
@@ -688,6 +688,14 @@ composed through pairs.
       state->last_err = "unhandled type";
       return 1;
     }
+    NL_BUILTIN(write) {
+      if (cell.type != NL_PAIR) {
+        state->last_err = "illegal write call: non-pair args";
+        return 1;
+      }
+      if (nl_evalq(state, cell.value.as_pair[0], result)) return 1;
+      return nl_writeq(state, *result, result);
+    }
     #define NL_DEF_BUILTIN(sym, name) nl_state_put(state, sym, nl_cell_as_int((int64_t)nl_ ## name))
     void nl_state_define_builtins(struct nl_state *state) {
       NL_DEF_BUILTIN("quote", quote);
@@ -699,6 +707,12 @@ composed through pairs.
       NL_DEF_BUILTIN("defq", defq);
       NL_DEF_BUILTIN("eval", eval);
       NL_DEF_BUILTIN("list", list);
+      NL_DEF_BUILTIN("head", head);
+      NL_DEF_BUILTIN("tail", tail);
+      NL_DEF_BUILTIN("cons", cons);
+      NL_DEF_BUILTIN("writeq", writeq);
+      NL_DEF_BUILTIN("write", write);
+      NL_DEF_BUILTIN("=", equal);
       NL_DEF_BUILTIN("+", add);
       NL_DEF_BUILTIN("-", sub);
       NL_DEF_BUILTIN("*", mul);
@@ -726,7 +740,7 @@ composed through pairs.
           return 2;
         }
         fputs("\n", state->stdout);
-        nl_write(state, last_eval, &last_read);
+        nl_writeq(state, last_eval, &last_read);
       }
     }
     int main() {
