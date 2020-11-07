@@ -257,6 +257,42 @@ composed through pairs.
       ,*result = cell;
       return 0;
     }
+    NL_BUILTIN(is_nil) {
+      struct nl_cell val;
+      if (nl_evalq(state, cell.type == NL_PAIR ? cell.value.as_pair[0] : cell, result)) return 1;
+      if (result->type == NL_NIL)
+        ,*result = nl_cell_as_symbol("t");
+      else
+        ,*result = nl_cell_as_nil();
+      return 0;
+    }
+    NL_BUILTIN(is_integer) {
+      struct nl_cell val;
+      if (nl_evalq(state, cell.type == NL_PAIR ? cell.value.as_pair[0] : cell, result)) return 1;
+      if (result->type == NL_INTEGER)
+        ,*result = nl_cell_as_symbol("t");
+      else
+        ,*result = nl_cell_as_nil();
+      return 0;
+    }
+    NL_BUILTIN(is_pair) {
+      struct nl_cell val;
+      if (nl_evalq(state, cell.type == NL_PAIR ? cell.value.as_pair[0] : cell, result)) return 1;
+      if (result->type == NL_PAIR)
+        ,*result = nl_cell_as_symbol("t");
+      else
+        ,*result = nl_cell_as_nil();
+      return 0;
+    }
+    NL_BUILTIN(is_symbol) {
+      struct nl_cell val;
+      if (nl_evalq(state, cell.type == NL_PAIR ? cell.value.as_pair[0] : cell, result)) return 1;
+      if (result->type == NL_SYMBOL)
+        ,*result = nl_cell_as_symbol("t");
+      else
+        ,*result = nl_cell_as_nil();
+      return 0;
+    }
     int nl_cell_equal(struct nl_cell a, struct nl_cell b) {
       if (a.type != b.type) return 0;
       switch (a.type) {
@@ -310,14 +346,26 @@ composed through pairs.
         letq_tag = nl_cell_as_pair(nl_cell_as_pair(nl_cell_as_nil(), nl_cell_as_nil()),
                                    head.value.as_pair[1]);
         vars = letq_tag.value.as_pair;
-        for (args = cell.value.as_pair + 1, params = head.value.as_pair;
-             args->type == NL_PAIR && params->type == NL_PAIR;
-             args = args->value.as_pair + 1, params = params->value.as_pair + 1)
-          {
-            ,*vars = nl_cell_as_pair(params->value.as_pair[0], nl_cell_as_pair(args->value.as_pair[0], nl_cell_as_nil()));
-            vars = vars->value.as_pair + 1;
+        args = cell.value.as_pair + 1;
+        params = head.value.as_pair;
+        for (;;) {
+          if (args->type != NL_PAIR || params->type != NL_PAIR) {
+            // out of args or params
+            while (params->type == NL_PAIR) {
+              vars->value.as_pair[0] = params->value.as_pair[0];
+              vars->value.as_pair[1] = nl_cell_as_pair(nl_cell_as_nil(), nl_cell_as_pair(nl_cell_as_nil(), nl_cell_as_nil()));
+              vars = vars->value.as_pair[1].value.as_pair + 1;
+              params = params->value.as_pair + 1;
+            }
+            ,*vars = nl_cell_as_nil();
+            return nl_letq(state, letq_tag, result);
           }
-        return nl_letq(state, letq_tag, result);
+          vars->value.as_pair[0] = params->value.as_pair[0];
+          vars->value.as_pair[1] = nl_cell_as_pair(args->value.as_pair[0], nl_cell_as_pair(nl_cell_as_nil(), nl_cell_as_nil()));
+          vars = vars->value.as_pair[1].value.as_pair + 1;
+          args = args->value.as_pair + 1;
+          params = params->value.as_pair + 1;
+        }
       default:
         state->last_err = "unknown cell type";
         return 1;
@@ -631,16 +679,14 @@ composed through pairs.
       }
       vars = cell.value.as_pair[0];
       body = cell.value.as_pair[1];
-      if (vars.type != NL_PAIR) {
-        state->last_err = "illegal letq: non-pair var list";
-        return 1;
-      }
       if (body.type != NL_PAIR) {
         state->last_err = "illegal letq: non-pair body";
         return 1;
       }
       nl_state_init(&body_state);
-      if (nl_setqe(&body_state, state, vars, result)) return 1;
+      if (vars.type == NL_PAIR) {
+        if (nl_setqe(&body_state, state, vars, result)) return 1;
+      }
       nl_state_link(&body_state, state);
       for (tail = &body; tail->type == NL_PAIR; tail = tail->value.as_pair + 1) {
         if (nl_evalq(&body_state, tail->value.as_pair[0], result)) return 1;
@@ -700,8 +746,34 @@ composed through pairs.
       if (nl_evalq(state, cell.value.as_pair[0], result)) return 1;
       return nl_writeq(state, *result, result);
     }
+    NL_BUILTIN(and) {
+      struct nl_cell *tail;
+      if (cell.type != NL_PAIR) {
+        state->last_err = "illegal and: non-pair args";
+        return 1;
+      }
+      for (tail = &cell; tail->type == NL_PAIR; tail = tail->value.as_pair + 1) {
+        if (nl_evalq(state, tail->value.as_pair[0], result)) return 1;
+        if (result->type == NL_NIL) return 0;
+      }
+    }
+    NL_BUILTIN(or) {
+      struct nl_cell *tail;
+      if (cell.type != NL_PAIR) {
+        state->last_err = "illegal or: non-pair args";
+        return 1;
+      }
+      for (tail = &cell; tail->type == NL_PAIR; tail = tail->value.as_pair + 1) {
+        if (nl_evalq(state, tail->value.as_pair[0], result)) return 1;
+        if (result->type != NL_NIL) return 0;
+      }
+    }
     #define NL_DEF_BUILTIN(sym, name) nl_state_put(state, sym, nl_cell_as_int((int64_t)nl_ ## name))
     void nl_state_define_builtins(struct nl_state *state) {
+      NL_DEF_BUILTIN("pair?", is_pair);
+      NL_DEF_BUILTIN("nil?", is_nil);
+      NL_DEF_BUILTIN("symbol?", is_symbol);
+      NL_DEF_BUILTIN("integer?", is_integer);
       NL_DEF_BUILTIN("quote", quote);
       NL_DEF_BUILTIN("printq", printq);
       NL_DEF_BUILTIN("print", print);
@@ -714,6 +786,8 @@ composed through pairs.
       NL_DEF_BUILTIN("head", head);
       NL_DEF_BUILTIN("tail", tail);
       NL_DEF_BUILTIN("cons", cons);
+      NL_DEF_BUILTIN("and", and);
+      NL_DEF_BUILTIN("or", or);
       NL_DEF_BUILTIN("writeq", writeq);
       NL_DEF_BUILTIN("write", write);
       NL_DEF_BUILTIN("=", equal);
