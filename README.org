@@ -41,6 +41,12 @@ composed through pairs.
    it should require the use of =quasiquote=. need both a single-item
    and a splicing version, e.g. ='(1 2 ,(+ 1 2))= should produce the list
    =(1 2 3)= while ='(1 2 `(range 3 5))= should produce =(1 2 3 4 5)=
+* Compiling
+  #+BEGIN_SRC shell
+  gcc -Wall src/nl.c -o bin/nl
+  #+END_SRC
+
+  #+RESULTS:
 * Source
   :PROPERTIES:
   :header-args:C: :tangle src/nl.c
@@ -993,10 +999,4 @@ composed through pairs.
       return nl_run_repl(&state);
     }
   #+END_SRC
-* Compiling
-  #+BEGIN_SRC shell
-  gcc -Wall src/nl.c -o bin/nl
-  #+END_SRC
-
-  #+RESULTS:
 
