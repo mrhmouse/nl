@@ -151,24 +151,29 @@ composed through pairs.
       } while (isspace(ch));
       return ch;
     }
-    char *nl_intern(struct nl_state *state, char *sym) {
-      struct nl_state *s;
-      struct nl_symbols *d;
-      for (s = state; s != NULL; s = s->parent_state) {
-        for (d = s->symbols; d != NULL; d = d->next) {
-          if (0 == strcmp(sym, d->name)) {
-            free(sym);
-            return d->name;
-          }
-          if (d->next == NULL) {
-            if (s->parent_state) break;
-            d->next = GC_malloc(sizeof(*d->next));
-            d = d->next;
-            d->name = sym;
-            d->value = nl_cell_as_nil();
-            d->next = NULL;
-            return sym;
-          }
+    struct nl_interned_symbols {
+      char *sym;
+      struct nl_interned_symbols *next;
+    };
+    static struct nl_interned_symbols *nl_interned_symbols;
+    char *nl_intern(char *sym) {
+      if (!nl_interned_symbols) {
+        nl_interned_symbols = malloc(sizeof(*nl_interned_symbols));
+        nl_interned_symbols->sym = sym;
+        nl_interned_symbols->next = NULL;
+        return sym;
+      }
+      struct nl_interned_symbols *s;
+      for (s = nl_interned_symbols; s != NULL; s = s->next) {
+        if (0 == strcmp(sym, s->sym)) {
+          free(sym);
+          return s->sym;
+        }
+        if (s->next == NULL) {
+          s->next = malloc(sizeof(*s->next));
+          s->next->sym = sym;
+          s->next->next = NULL;
+          return sym;
         }
       }
       return NULL;
@@ -200,11 +205,11 @@ composed through pairs.
         return 1;
       } else if ('\'' == ch) {
         if (nl_read(state, &head)) return 1;
-        ,*result = nl_cell_as_pair(nl_cell_as_symbol(nl_intern(state, strdup("quote"))), head);
+        ,*result = nl_cell_as_pair(nl_cell_as_symbol(nl_intern(strdup("quote"))), head);
         return 0;
       } else if (',' == ch) {
         if (nl_read(state, &head)) return 1;
-        ,*result = nl_cell_as_pair(nl_cell_as_symbol(nl_intern(state, strdup("unquote"))), head);
+        ,*result = nl_cell_as_pair(nl_cell_as_symbol(nl_intern(strdup("unquote"))), head);
         return 0;
       } else if ('(' == ch) {
         ch = nl_skip_whitespace(state);
@@ -249,7 +254,7 @@ composed through pairs.
         ungetc(ch, state->stdin);
         buf[used] = '\0';
         buf = realloc(buf, sizeof(char) * used);
-        ,*result = nl_cell_as_symbol(nl_intern(state, buf));
+        ,*result = nl_cell_as_symbol(nl_intern(buf));
         return 0;
       }
     }
@@ -257,34 +262,32 @@ composed through pairs.
 ** Working with State
   #+BEGIN_SRC c
     void nl_state_put(struct nl_state *state, const char *name, struct nl_cell value) {
-      int match = 0;
-      struct nl_symbols *s, *l;
+      struct nl_symbols *s, *match = NULL;
       for (; state != NULL; state = state->parent_state) {
         for (s = state->symbols; s != NULL; s = s->next) {
-          l = s;
-          if (0 == strcmp(name, s->name)) {
-            match = 1;
-            break;
+          if (name == s->name) {
+            s->value = value;
+            return;
+          }
+          if (!s->next && !state->parent_state) {
+            s->next = GC_malloc(sizeof(*s->next));
+            s->next->name = name;
+            s->next->value = value;
+            return;
           }
         }
-        if (match) break;
       }
-      if (!match) {
-        l->next = GC_malloc(sizeof(*l->next));
-        l->next->name = strdup(name);
-        l = l->next;
-      }
-      l->value = value;
     }
     void nl_state_get(struct nl_state *state, const char *name, struct nl_cell *result) {
       struct nl_symbols *s;
-      for (s = state->symbols; s != NULL; s = s->next)
-        if (0 == strcmp(name, s->name)) {
-          ,*result = s->value;
-          return;
-        }
-      if (state->parent_state) nl_state_get(state->parent_state, name, result);
-      else *result = nl_cell_as_nil();
+      for (; state != NULL; state = state->parent_state) {
+        for (s = state->symbols; s != NULL; s = s->next)
+          if (name == s->name) {
+            ,*result = s->value;
+            return;
+          }
+      }
+      ,*result = nl_cell_as_nil();
     }
     void nl_state_link(struct nl_state *child, struct nl_state *parent) {
       child->stdout = parent->stdout;
@@ -304,7 +307,7 @@ composed through pairs.
     NL_BUILTIN(is_nil) {
       if (nl_evalq(state, cell.type == NL_PAIR ? cell.value.as_pair[0] : cell, result)) return 1;
       if (result->type == NL_NIL)
-        ,*result = nl_cell_as_symbol(nl_intern(state, strdup("t")));
+        ,*result = nl_cell_as_symbol(nl_intern(strdup("t")));
       else
         ,*result = nl_cell_as_nil();
       return 0;
@@ -312,7 +315,7 @@ composed through pairs.
     NL_BUILTIN(is_integer) {
       if (nl_evalq(state, cell.type == NL_PAIR ? cell.value.as_pair[0] : cell, result)) return 1;
       if (result->type == NL_INTEGER)
-        ,*result = nl_cell_as_symbol(nl_intern(state, strdup("t")));
+        ,*result = nl_cell_as_symbol(nl_intern(strdup("t")));
       else
         ,*result = nl_cell_as_nil();
       return 0;
@@ -320,7 +323,7 @@ composed through pairs.
     NL_BUILTIN(is_pair) {
       if (nl_evalq(state, cell.type == NL_PAIR ? cell.value.as_pair[0] : cell, result)) return 1;
       if (result->type == NL_PAIR)
-        ,*result = nl_cell_as_symbol(nl_intern(state, strdup("t")));
+        ,*result = nl_cell_as_symbol(nl_intern(strdup("t")));
       else
         ,*result = nl_cell_as_nil();
       return 0;
@@ -328,7 +331,7 @@ composed through pairs.
     NL_BUILTIN(is_symbol) {
       if (nl_evalq(state, cell.type == NL_PAIR ? cell.value.as_pair[0] : cell, result)) return 1;
       if (result->type == NL_SYMBOL)
-        ,*result = nl_cell_as_symbol(nl_intern(state, strdup("t")));
+        ,*result = nl_cell_as_symbol(nl_intern(strdup("t")));
       else
         ,*result = nl_cell_as_nil();
       return 0;
@@ -338,7 +341,7 @@ composed through pairs.
       switch (a.type) {
       case NL_NIL: return 1;
       case NL_INTEGER: return a.value.as_integer == b.value.as_integer;
-      case NL_SYMBOL: return 0 == strcmp(a.value.as_symbol, b.value.as_symbol);
+      case NL_SYMBOL: return a.value.as_symbol == b.value.as_symbol;
       case NL_PAIR: return nl_cell_equal(a.value.as_pair[0], b.value.as_pair[0])
           && nl_cell_equal(a.value.as_pair[1], b.value.as_pair[1]);
       default: return 0;
@@ -407,7 +410,7 @@ composed through pairs.
           }
         case NL_SYMBOL:
           ,*vars = nl_cell_as_pair(head.value.as_pair[0],
-                                  nl_cell_as_pair(nl_cell_as_pair(nl_cell_as_symbol(nl_intern(state, strdup("quote"))),
+                                  nl_cell_as_pair(nl_cell_as_pair(nl_cell_as_symbol(nl_intern(strdup("quote"))),
                                                                   cell.value.as_pair[1]),
                                                   nl_cell_as_nil()));
         case NL_NIL:
@@ -454,7 +457,7 @@ composed through pairs.
     NL_BUILTIN(equal) {
       struct nl_cell *tail, last, val;
       if (cell.type != NL_PAIR) {
-        ,*result = nl_cell_as_symbol(nl_intern(state, strdup("t")));
+        ,*result = nl_cell_as_symbol(nl_intern(strdup("t")));
         return 0;
       }
       if (nl_evalq(state, cell.value.as_pair[0], &last)) return 1;
@@ -465,7 +468,7 @@ composed through pairs.
           return 0;
         }
       }
-      ,*result = nl_cell_as_symbol(nl_intern(state, strdup("t")));
+      ,*result = nl_cell_as_symbol(nl_intern(strdup("t")));
       return 0;
     }
     int64_t nl_list_length(struct nl_cell l) {
@@ -532,7 +535,7 @@ composed through pairs.
           return 0;
         }
       }
-      ,*result = nl_cell_as_symbol(nl_intern(state, strdup("t")));
+      ,*result = nl_cell_as_symbol(nl_intern(strdup("t")));
       return 0;
     }
     NL_BUILTIN(gt) {
@@ -549,7 +552,7 @@ composed through pairs.
           return 0;
         }
       }
-      ,*result = nl_cell_as_symbol(nl_intern(state, strdup("t")));
+      ,*result = nl_cell_as_symbol(nl_intern(strdup("t")));
       return 0;
     }
     NL_BUILTIN(lte) {
@@ -566,7 +569,7 @@ composed through pairs.
           return 0;
         }
       }
-      ,*result = nl_cell_as_symbol(nl_intern(state, strdup("t")));
+      ,*result = nl_cell_as_symbol(nl_intern(strdup("t")));
       return 0;
     }
     NL_BUILTIN(gte) {
@@ -583,13 +586,13 @@ composed through pairs.
           return 0;
         }
       }
-      ,*result = nl_cell_as_symbol(nl_intern(state, strdup("t")));
+      ,*result = nl_cell_as_symbol(nl_intern(strdup("t")));
       return 0;
     }
     NL_BUILTIN(not) {
       if (nl_evalq(state, cell.type == NL_PAIR ? cell.value.as_pair[0] : cell, result)) return 1;
       if (result->type == NL_NIL)
-        ,*result = nl_cell_as_symbol(nl_intern(state, strdup("t")));
+        ,*result = nl_cell_as_symbol(nl_intern(strdup("t")));
       else
         ,*result = nl_cell_as_nil();
       return 0;
@@ -970,7 +973,7 @@ composed through pairs.
       }
       return 0;
     }
-    #define NL_DEF_BUILTIN(sym, name) nl_state_put(state, sym, nl_cell_as_int((int64_t)nl_ ## name))
+    #define NL_DEF_BUILTIN(sym, name) nl_state_put(state, nl_intern(strdup(sym)), nl_cell_as_int((int64_t)nl_ ## name))
     void nl_state_define_builtins(struct nl_state *state) {
       NL_DEF_BUILTIN("pair?", is_pair);
       NL_DEF_BUILTIN("nil?", is_nil);
