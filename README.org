@@ -425,7 +425,6 @@ composed through pairs.
       }
     }
     NL_BUILTIN(macro) {
-      struct nl_cell *args;
       if (cell.type != NL_PAIR) {
         state->last_err = "illegal macro call: non-pair args";
         return 1;
@@ -438,8 +437,8 @@ composed through pairs.
         state->last_err = "illegal macro call: non-pair args tail";
         return 1;
       }
-      for (args = cell.value.as_pair + 1; args->type == NL_PAIR; args = args->value.as_pair + 1)
-        if (nl_evalq(state, args->value.as_pair[0], args->value.as_pair)) return 1;
+      if (nl_evalq(state, cell.value.as_pair[1].value.as_pair[0], result)) return 1;
+      cell = nl_cell_as_pair(cell.value.as_pair[0], *result);
       return nl_evalq(state, cell, result);
     }
     NL_BUILTIN(eval) {
