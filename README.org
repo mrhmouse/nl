@@ -43,7 +43,7 @@ composed through pairs.
    =(1 2 3)= while ='(1 2 `(range 3 5))= should produce =(1 2 3 4 5)=
 * Compiling
   #+BEGIN_SRC shell
-  gcc -Wall src/nl.c -o bin/nl
+  gcc -lgc -Wall src/nl.c -o bin/nl
   #+END_SRC
 
   #+RESULTS:
@@ -73,6 +73,7 @@ composed through pairs.
     #include <stdlib.h>
     #include <stdio.h>
     #include <string.h>
+    #include <gc.h>
   #+END_SRC
 ** Structures and Typedefs
   #+BEGIN_SRC c
@@ -118,7 +119,7 @@ composed through pairs.
     struct nl_cell nl_cell_as_pair(struct nl_cell head, struct nl_cell tail) {
       struct nl_cell c;
       c.type = NL_PAIR;
-      c.value.as_pair = malloc(sizeof(head) + sizeof(tail));
+      c.value.as_pair = GC_malloc(sizeof(head) + sizeof(tail));
       c.value.as_pair[0] = head;
       c.value.as_pair[1] = tail;
       return c;
@@ -135,7 +136,7 @@ composed through pairs.
       state->stderr = stderr;
       state->last_err = NULL;
       state->parent_state = NULL;
-      state->symbols = malloc(sizeof(*state->symbols));
+      state->symbols = GC_malloc(sizeof(*state->symbols));
       state->symbols->name = "nil";
       state->symbols->value.type = NL_NIL;
       state->symbols->next = NULL;
@@ -161,7 +162,7 @@ composed through pairs.
           }
           if (d->next == NULL) {
             if (s->parent_state) break;
-            d->next = malloc(sizeof(*d->next));
+            d->next = GC_malloc(sizeof(*d->next));
             d = d->next;
             d->name = sym;
             d->value = nl_cell_as_nil();
@@ -269,7 +270,7 @@ composed through pairs.
         if (match) break;
       }
       if (!match) {
-        l->next = malloc(sizeof(*l->next));
+        l->next = GC_malloc(sizeof(*l->next));
         l->next->name = strdup(name);
         l = l->next;
       }
