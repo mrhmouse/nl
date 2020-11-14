@@ -27,6 +27,10 @@
 #include <string.h>
 #include <wchar.h>
 #include <gc.h>
+#define NL_HEAD(cell) cell.value.as_pair[0]
+#define NL_TAIL(cell) cell.value.as_pair[1]
+#define NL_HEAD_AT(ref) ref->value.as_pair[0]
+#define NL_TAIL_AT(ref) ref->value.as_pair[1]
 //
 // Structures and typedefs
 // =======================
@@ -115,8 +119,8 @@ struct nl_cell nl_cell_as_pair(struct nl_cell head, struct nl_cell tail) {
   struct nl_cell c;
   c.type = NL_PAIR;
   c.value.as_pair = GC_malloc(sizeof(head) + sizeof(tail));
-  c.value.as_pair[0] = head;
-  c.value.as_pair[1] = tail;
+  NL_HEAD(c) = head;
+  NL_TAIL(c) = tail;
   return c;
 }
 // create a cell referencing the given symbol, which should
@@ -346,8 +350,6 @@ void nl_scope_link(struct nl_scope *child, struct nl_scope *parent) {
 #define NL_BUILTIN(name) int nl_ ## name(struct nl_scope *scope, struct nl_cell cell, struct nl_cell *result)
 #define NL_FOREACH(start, a) for (a = start; a->type == NL_PAIR; a = a->value.as_pair + 1)
 #define NL_DEF_BUILTIN(sym, name) nl_scope_put(scope, nl_intern(strdup(sym)), nl_cell_as_int((int64_t)nl_ ## name))
-#define NL_HEAD(cell) cell.value.as_pair[0]
-#define NL_TAIL(cell) cell.value.as_pair[1]
 NL_BUILTIN(evalq);
 int nl_setqe(struct nl_scope *target_scope, struct nl_scope *eval_scope, struct nl_cell args, struct nl_cell *result) {
   struct nl_cell *tail;
@@ -355,18 +357,18 @@ int nl_setqe(struct nl_scope *target_scope, struct nl_scope *eval_scope, struct 
     target_scope->last_err = "illegal setq call: non-pair args";
     return 1;
   }
-  for (tail = &args; tail->type == NL_PAIR; tail = tail->value.as_pair[1].value.as_pair + 1) {
-    if (tail->value.as_pair[0].type != NL_SYMBOL) {
+  for (tail = &args; tail->type == NL_PAIR; tail = NL_TAIL_AT(tail).value.as_pair + 1) {
+    if (NL_HEAD_AT(tail).type != NL_SYMBOL) {
       target_scope->last_err = "illegal setq call: non-symbol var";
       return 1;
     }
-    if (tail->value.as_pair[1].type != NL_PAIR) {
-      if (nl_evalq(eval_scope, tail->value.as_pair[1], result)) return 1;
-      nl_scope_put(target_scope, tail->value.as_pair[0].value.as_symbol, *result);
+    if (NL_TAIL_AT(tail).type != NL_PAIR) {
+      if (nl_evalq(eval_scope, NL_TAIL_AT(tail), result)) return 1;
+      nl_scope_put(target_scope, NL_HEAD_AT(tail).value.as_symbol, *result);
       return 0;
     }
-    if (nl_evalq(eval_scope, tail->value.as_pair[1].value.as_pair[0], result)) return 1;
-    nl_scope_put(target_scope, tail->value.as_pair[0].value.as_symbol, *result);
+    if (nl_evalq(eval_scope, NL_HEAD(NL_TAIL_AT(tail)), result)) return 1;
+    nl_scope_put(target_scope, NL_HEAD_AT(tail).value.as_symbol, *result);
   }
   return 0;
 }
@@ -389,8 +391,8 @@ NL_BUILTIN(letq) {
     scope->last_err = "illegal letq: non-pair args";
     return 1;
   }
-  vars = cell.value.as_pair[0];
-  body = cell.value.as_pair[1];
+  vars = NL_HEAD(cell);
+  body = NL_TAIL(cell);
   if (body.type != NL_PAIR) {
     scope->last_err = "illegal letq: non-pair body";
     return 1;
@@ -401,7 +403,7 @@ NL_BUILTIN(letq) {
   }
   nl_scope_link(&body_scope, scope);
   NL_FOREACH(&body, tail) {
-    if (nl_evalq(&body_scope, tail->value.as_pair[0], result)) return 1;
+    if (nl_evalq(&body_scope, NL_HEAD_AT(tail), result)) return 1;
   }
   if (tail->type != NL_NIL) return nl_evalq(&body_scope, *tail, result);
   return 0;
@@ -435,19 +437,19 @@ NL_BUILTIN(call) {
   case NL_PAIR:
     a = &NL_TAIL(cell);
     NL_FOREACH(&NL_HEAD(NL_HEAD(cell)), p) {
-      if (p->value.as_pair[0].type != NL_SYMBOL) {
+      if (NL_HEAD_AT(p).type != NL_SYMBOL) {
         scope->last_err = "illegal call: non-symbol parameter in lambda";
         return 1;
       }
       if (a->type == NL_PAIR) {
-        if (nl_evalq(scope, a->value.as_pair[0], &v)) return 1;
-        nl_scope_put(&call_scope, p->value.as_pair[0].value.as_symbol, v);
+        if (nl_evalq(scope, NL_HEAD_AT(a), &v)) return 1;
+        nl_scope_put(&call_scope, NL_HEAD_AT(p).value.as_symbol, v);
         a = a->value.as_pair + 1;
       } else if (a->type == NL_NIL) {
-        nl_scope_put(&call_scope, p->value.as_pair[0].value.as_symbol, *a);
+        nl_scope_put(&call_scope, NL_HEAD_AT(p).value.as_symbol, *a);
       } else {
         if (nl_evalq(scope, *a, &v)) return 1;
-        nl_scope_put(&call_scope, p->value.as_pair[0].value.as_symbol, v);
+        nl_scope_put(&call_scope, NL_HEAD_AT(p).value.as_symbol, v);
         a->type = NL_NIL;
       }
     }
@@ -460,7 +462,7 @@ NL_BUILTIN(call) {
   }
   nl_scope_link(&call_scope, scope);
   NL_FOREACH(&NL_TAIL(NL_HEAD(cell)), p) {
-    if (nl_evalq(&call_scope, p->value.as_pair[0], result)) return 1;
+    if (nl_evalq(&call_scope, NL_HEAD_AT(p), result)) return 1;
   }
   return 0;
 }
@@ -485,7 +487,7 @@ NL_BUILTIN(quote) {
   return 0;
 }
 NL_BUILTIN(is_nil) {
-  if (nl_evalq(scope, cell.type == NL_PAIR ? cell.value.as_pair[0] : cell, result)) return 1;
+  if (nl_evalq(scope, cell.type == NL_PAIR ? NL_HEAD(cell) : cell, result)) return 1;
   if (result->type == NL_NIL)
     *result = nl_cell_as_symbol(nl_intern(strdup("t")));
   else
@@ -493,7 +495,7 @@ NL_BUILTIN(is_nil) {
   return 0;
 }
 NL_BUILTIN(is_integer) {
-  if (nl_evalq(scope, cell.type == NL_PAIR ? cell.value.as_pair[0] : cell, result)) return 1;
+  if (nl_evalq(scope, cell.type == NL_PAIR ? NL_HEAD(cell) : cell, result)) return 1;
   if (result->type == NL_INTEGER)
     *result = nl_cell_as_symbol(nl_intern(strdup("t")));
   else
@@ -501,7 +503,7 @@ NL_BUILTIN(is_integer) {
   return 0;
 }
 NL_BUILTIN(is_pair) {
-  if (nl_evalq(scope, cell.type == NL_PAIR ? cell.value.as_pair[0] : cell, result)) return 1;
+  if (nl_evalq(scope, cell.type == NL_PAIR ? NL_HEAD(cell) : cell, result)) return 1;
   if (result->type == NL_PAIR)
     *result = nl_cell_as_symbol(nl_intern(strdup("t")));
   else
@@ -509,7 +511,7 @@ NL_BUILTIN(is_pair) {
   return 0;
 }
 NL_BUILTIN(is_symbol) {
-  if (nl_evalq(scope, cell.type == NL_PAIR ? cell.value.as_pair[0] : cell, result)) return 1;
+  if (nl_evalq(scope, cell.type == NL_PAIR ? NL_HEAD(cell) : cell, result)) return 1;
   if (result->type == NL_SYMBOL)
     *result = nl_cell_as_symbol(nl_intern(strdup("t")));
   else
@@ -522,8 +524,8 @@ int nl_cell_equal(struct nl_cell a, struct nl_cell b) {
   case NL_NIL: return 1;
   case NL_INTEGER: return a.value.as_integer == b.value.as_integer;
   case NL_SYMBOL: return a.value.as_symbol == b.value.as_symbol;
-  case NL_PAIR: return nl_cell_equal(a.value.as_pair[0], b.value.as_pair[0])
-      && nl_cell_equal(a.value.as_pair[1], b.value.as_pair[1]);
+  case NL_PAIR: return nl_cell_equal(NL_HEAD(a), NL_HEAD(b))
+      && nl_cell_equal(NL_TAIL(a), NL_TAIL(b));
   default: return 0;
   }
 }
@@ -532,16 +534,16 @@ NL_BUILTIN(apply) {
     scope->last_err = "illegal apply call: non-pair args";
     return 1;
   }
-  if (cell.value.as_pair[0].type != NL_SYMBOL) {
+  if (NL_HEAD(cell).type != NL_SYMBOL) {
     scope->last_err = "illegal apply call: first arg should be symbol";
     return 1;
   }
-  if (cell.value.as_pair[1].type != NL_PAIR) {
+  if (NL_TAIL(cell).type != NL_PAIR) {
     scope->last_err = "illegal apply call: non-pair args tail";
     return 1;
   }
-  if (nl_evalq(scope, cell.value.as_pair[1].value.as_pair[0], result)) return 1;
-  cell = nl_cell_as_pair(cell.value.as_pair[0], *result);
+  if (nl_evalq(scope, NL_HEAD(NL_TAIL(cell)), result)) return 1;
+  cell = nl_cell_as_pair(NL_HEAD(cell), *result);
   return nl_evalq(scope, cell, result);
 }
 NL_BUILTIN(eval) {
@@ -551,7 +553,7 @@ NL_BUILTIN(eval) {
     return 1;
   }
   NL_FOREACH(&cell, tail) {
-    if (nl_evalq(scope, tail->value.as_pair[0], &form)) return 1;
+    if (nl_evalq(scope, NL_HEAD_AT(tail), &form)) return 1;
     if (nl_evalq(scope, form, result)) return 1;
   }
   return 0;
@@ -601,17 +603,17 @@ NL_BUILTIN(map) {
   }
   *result = nl_cell_as_pair(nl_cell_as_nil(), nl_cell_as_nil());
   NL_FOREACH(&list, item) {
-    call = nl_cell_as_pair(fun, nl_cell_as_pair(nl_cell_as_pair(quote, item->value.as_pair[0]), nl_cell_as_nil()));
+    call = nl_cell_as_pair(fun, nl_cell_as_pair(nl_cell_as_pair(quote, NL_HEAD_AT(item)), nl_cell_as_nil()));
     if (nl_call(scope, call, result->value.as_pair)) return 1;
-    switch (item->value.as_pair[1].type) {
+    switch (NL_TAIL_AT(item).type) {
     case NL_NIL:
       break;
     case NL_PAIR:
-      result->value.as_pair[1] = nl_cell_as_pair(nl_cell_as_nil(), nl_cell_as_nil());
+      NL_TAIL_AT(result) = nl_cell_as_pair(nl_cell_as_nil(), nl_cell_as_nil());
       result = result->value.as_pair + 1;
       break;
     default:
-      call = nl_cell_as_pair(fun, nl_cell_as_pair(nl_cell_as_pair(quote, item->value.as_pair[1]), nl_cell_as_nil()));
+      call = nl_cell_as_pair(fun, nl_cell_as_pair(nl_cell_as_pair(quote, NL_TAIL_AT(item)), nl_cell_as_nil()));
       return nl_call(scope, call, result->value.as_pair + 1);
     }
   }
@@ -639,11 +641,11 @@ NL_BUILTIN(filter) {
   }
   *result = nl_cell_as_pair(nl_cell_as_nil(), nl_cell_as_nil());
   NL_FOREACH(&list, item) {
-    call = nl_cell_as_pair(fun, nl_cell_as_pair(nl_cell_as_pair(quote, item->value.as_pair[0]), nl_cell_as_nil()));
+    call = nl_cell_as_pair(fun, nl_cell_as_pair(nl_cell_as_pair(quote, NL_HEAD_AT(item)), nl_cell_as_nil()));
     if (nl_call(scope, call, result->value.as_pair)) return 1;
-    if (result->value.as_pair[0].type != NL_NIL) {
-      result->value.as_pair[0] = item->value.as_pair[0];
-      result->value.as_pair[1] = nl_cell_as_pair(nl_cell_as_nil(), nl_cell_as_nil());
+    if (NL_HEAD_AT(result).type != NL_NIL) {
+      NL_HEAD_AT(result) = NL_HEAD_AT(item);
+      NL_TAIL_AT(result) = nl_cell_as_pair(nl_cell_as_nil(), nl_cell_as_nil());
       result = result->value.as_pair + 1;
     }
   }
@@ -675,7 +677,7 @@ NL_BUILTIN(reduce) {
     return 1;
   }
   NL_FOREACH(&list, item) {
-    call = nl_cell_as_pair(fun, nl_cell_as_pair(nl_cell_as_pair(quote, item->value.as_pair[0]), nl_cell_as_pair(nl_cell_as_pair(quote, *result), nl_cell_as_nil())));
+    call = nl_cell_as_pair(fun, nl_cell_as_pair(nl_cell_as_pair(quote, NL_HEAD_AT(item)), nl_cell_as_pair(nl_cell_as_pair(quote, *result), nl_cell_as_nil())));
     if (nl_call(scope, call, result)) return 1;
   }
   return 0;
@@ -686,9 +688,9 @@ NL_BUILTIN(equal) {
     *result = nl_cell_as_symbol(nl_intern(strdup("t")));
     return 0;
   }
-  if (nl_evalq(scope, cell.value.as_pair[0], &last)) return 1;
+  if (nl_evalq(scope, NL_HEAD(cell), &last)) return 1;
   NL_FOREACH(cell.value.as_pair + 1, tail) {
-    if (nl_evalq(scope, tail->value.as_pair[0], &val)) return 1;
+    if (nl_evalq(scope, NL_HEAD_AT(tail), &val)) return 1;
     if (!nl_cell_equal(last, val)) {
       *result = nl_cell_as_nil();
       return 0;
@@ -725,7 +727,7 @@ int nl_compare(struct nl_cell a, struct nl_cell b) {
       if (a_len == b_len) {
         // item-by-item comparison
         for (i = &a, j = &b; i->type == NL_PAIR && j->type == NL_PAIR; i = i->value.as_pair + 1, j = j->value.as_pair + 1) {
-          item_result = nl_compare(i->value.as_pair[0], j->value.as_pair[0]);
+          item_result = nl_compare(NL_HEAD_AT(i), NL_HEAD_AT(j));
           if (item_result) return item_result;
         }
         return nl_compare(*i, *j);
@@ -750,7 +752,7 @@ int nl_compare(struct nl_cell a, struct nl_cell b) {
 NL_BUILTIN(length) {
   int64_t n = 0;
   struct nl_cell *a;
-  if (nl_evalq(scope, cell.type == NL_PAIR ? cell.value.as_pair[0] : cell, result)) return 1;
+  if (nl_evalq(scope, cell.type == NL_PAIR ? NL_HEAD(cell) : cell, result)) return 1;
   switch (result->type) {
   case NL_NIL:
     n = 0;
@@ -764,7 +766,7 @@ NL_BUILTIN(length) {
   case NL_PAIR:
     NL_FOREACH(result, a) {
       n += 1;
-      switch (a->value.as_pair[1].type) {
+      switch (NL_TAIL_AT(a).type) {
       case NL_INTEGER:
       case NL_SYMBOL:
         n += 1;
@@ -786,9 +788,9 @@ NL_BUILTIN(lt) {
     *result = nl_cell_as_nil();
     return 0;
   }
-  if (nl_evalq(scope, cell.value.as_pair[0], &a)) return 1;
+  if (nl_evalq(scope, NL_HEAD(cell), &a)) return 1;
   NL_FOREACH(cell.value.as_pair + 1, p) {
-    if (nl_evalq(scope, p->value.as_pair[0], &b)) return 1;
+    if (nl_evalq(scope, NL_HEAD_AT(p), &b)) return 1;
     if (nl_compare(a, b) != -1) {
       *result = nl_cell_as_nil();
       return 0;
@@ -804,9 +806,9 @@ NL_BUILTIN(gt) {
     *result = nl_cell_as_nil();
     return 0;
   }
-  if (nl_evalq(scope, cell.value.as_pair[0], &a)) return 1;
+  if (nl_evalq(scope, NL_HEAD(cell), &a)) return 1;
   NL_FOREACH(cell.value.as_pair + 1, p) {
-    if (nl_evalq(scope, p->value.as_pair[0], &b)) return 1;
+    if (nl_evalq(scope, NL_HEAD_AT(p), &b)) return 1;
     if (nl_compare(a, b) != 1) {
       *result = nl_cell_as_nil();
       return 0;
@@ -822,9 +824,9 @@ NL_BUILTIN(lte) {
     *result = nl_cell_as_nil();
     return 0;
   }
-  if (nl_evalq(scope, cell.value.as_pair[0], &a)) return 1;
+  if (nl_evalq(scope, NL_HEAD(cell), &a)) return 1;
   NL_FOREACH(cell.value.as_pair + 1, p) {
-    if (nl_evalq(scope, p->value.as_pair[0], &b)) return 1;
+    if (nl_evalq(scope, NL_HEAD_AT(p), &b)) return 1;
     if (nl_compare(a, b) == 1) {
       *result = nl_cell_as_nil();
       return 0;
@@ -840,9 +842,9 @@ NL_BUILTIN(gte) {
     *result = nl_cell_as_nil();
     return 0;
   }
-  if (nl_evalq(scope, cell.value.as_pair[0], &a)) return 1;
+  if (nl_evalq(scope, NL_HEAD(cell), &a)) return 1;
   NL_FOREACH(cell.value.as_pair + 1, p) {
-    if (nl_evalq(scope, p->value.as_pair[0], &b)) return 1;
+    if (nl_evalq(scope, NL_HEAD_AT(p), &b)) return 1;
     if (nl_compare(a, b) == -1) {
       *result = nl_cell_as_nil();
       return 0;
@@ -853,7 +855,7 @@ NL_BUILTIN(gte) {
   return 0;
 }
 NL_BUILTIN(not) {
-  if (nl_evalq(scope, cell.type == NL_PAIR ? cell.value.as_pair[0] : cell, result)) return 1;
+  if (nl_evalq(scope, cell.type == NL_PAIR ? NL_HEAD(cell) : cell, result)) return 1;
   if (result->type == NL_NIL)
     *result = nl_cell_as_symbol(nl_intern(strdup("t")));
   else
@@ -865,12 +867,12 @@ NL_BUILTIN(head) {
     scope->last_err = "invalid head: non-pair args";
     return 1;
   }
-  if (cell.value.as_pair[1].type != NL_NIL) {
+  if (NL_TAIL(cell).type != NL_NIL) {
     scope->last_err = "invalid head: too many args";
     return 1;
   }
-  if (nl_evalq(scope, cell.value.as_pair[0], result)) return 1;
-  if (result->type == NL_PAIR) *result = result->value.as_pair[0];
+  if (nl_evalq(scope, NL_HEAD(cell), result)) return 1;
+  if (result->type == NL_PAIR) *result = NL_HEAD_AT(result);
   return 0;
 }
 NL_BUILTIN(tail) {
@@ -878,13 +880,13 @@ NL_BUILTIN(tail) {
     scope->last_err = "invalid tail: non-pair args";
     return 1;
   }
-  if (cell.value.as_pair[1].type != NL_NIL) {
+  if (NL_TAIL(cell).type != NL_NIL) {
     scope->last_err = "invalid tail: too many args";
     return 1;
   }
-  if (nl_evalq(scope, cell.value.as_pair[0], result)) return 1;
+  if (nl_evalq(scope, NL_HEAD(cell), result)) return 1;
   if (result->type == NL_PAIR)
-    *result = result->value.as_pair[1];
+    *result = NL_TAIL_AT(result);
   else
     *result = nl_cell_as_nil();
   return 0;
@@ -895,10 +897,10 @@ NL_BUILTIN(pair) {
     return 1;
   }
   *result = nl_cell_as_pair(nl_cell_as_nil(), nl_cell_as_nil());
-  if (nl_evalq(scope, cell.value.as_pair[0], result->value.as_pair)) return 1;
-  if (cell.value.as_pair[1].type == NL_PAIR) {
-    if (nl_evalq(scope, cell.value.as_pair[1].value.as_pair[0], result->value.as_pair + 1)) return 1;
-  } else if (nl_evalq(scope, cell.value.as_pair[1], result->value.as_pair + 1)) return 1;
+  if (nl_evalq(scope, NL_HEAD(cell), result->value.as_pair)) return 1;
+  if (NL_TAIL(cell).type == NL_PAIR) {
+    if (nl_evalq(scope, NL_HEAD(NL_TAIL(cell)), result->value.as_pair + 1)) return 1;
+  } else if (nl_evalq(scope, NL_TAIL(cell), result->value.as_pair + 1)) return 1;
   return 0;
 }
 NL_BUILTIN(list) {
@@ -909,11 +911,11 @@ NL_BUILTIN(list) {
   }
   *result = nl_cell_as_pair(nl_cell_as_nil(), nl_cell_as_nil());
   NL_FOREACH(&cell, in_tail) {
-    if (nl_evalq(scope, in_tail->value.as_pair[0], out_tail->value.as_pair)) return 1;
-    if (in_tail->value.as_pair[1].type != NL_PAIR) {
-      return nl_evalq(scope, in_tail->value.as_pair[1], out_tail->value.as_pair + 1);
+    if (nl_evalq(scope, NL_HEAD_AT(in_tail), out_tail->value.as_pair)) return 1;
+    if (NL_TAIL_AT(in_tail).type != NL_PAIR) {
+      return nl_evalq(scope, NL_TAIL_AT(in_tail), out_tail->value.as_pair + 1);
     }
-    out_tail->value.as_pair[1] = nl_cell_as_pair(nl_cell_as_nil(), nl_cell_as_nil());
+    NL_TAIL_AT(out_tail) = nl_cell_as_pair(nl_cell_as_nil(), nl_cell_as_nil());
     out_tail = out_tail->value.as_pair + 1;
   }
   return 0;
@@ -928,13 +930,13 @@ NL_BUILTIN(add) {
     scope->last_err = "illegal add: non-pair args";
     return 1;
   }
-  if (nl_evalq(scope, cell.value.as_pair[0], result)) return 1;
+  if (nl_evalq(scope, NL_HEAD(cell), result)) return 1;
   if (result->type != NL_INTEGER) {
     scope->last_err = "illegal add: non-integer arg";
     return 1;
   }
   NL_FOREACH(cell.value.as_pair + 1, tail) {
-    if (nl_evalq(scope, tail->value.as_pair[0], &val)) return 1;
+    if (nl_evalq(scope, NL_HEAD_AT(tail), &val)) return 1;
     if (val.type != NL_INTEGER) {
       scope->last_err = "illegal add: non-integer arg";
       return 1;
@@ -953,17 +955,17 @@ NL_BUILTIN(sub) {
     scope->last_err = "illegal sub: non-pair args";
     return 1;
   }
-  if (cell.value.as_pair[1].type == NL_NIL) {
-    *result = nl_cell_as_int(-cell.value.as_pair[0].value.as_integer);
+  if (NL_TAIL(cell).type == NL_NIL) {
+    *result = nl_cell_as_int(-NL_HEAD(cell).value.as_integer);
     return 0;
   }
-  if (nl_evalq(scope, cell.value.as_pair[0], result)) return 1;
+  if (nl_evalq(scope, NL_HEAD(cell), result)) return 1;
   if (result->type != NL_INTEGER) {
     scope->last_err = "illegal sub: non-integer arg";
     return 1;
   }
   NL_FOREACH(cell.value.as_pair + 1, tail) {
-    if (nl_evalq(scope, tail->value.as_pair[0], &val)) return 1;
+    if (nl_evalq(scope, NL_HEAD_AT(tail), &val)) return 1;
     if (val.type != NL_INTEGER) {
       scope->last_err = "illegal sub: non-integer arg";
       return 1;
@@ -984,7 +986,7 @@ NL_BUILTIN(mul) {
     return 1;
   }
   NL_FOREACH(&cell, tail) {
-    if (nl_evalq(scope, tail->value.as_pair[0], &val)) return 1;
+    if (nl_evalq(scope, NL_HEAD_AT(tail), &val)) return 1;
     if (val.type != NL_INTEGER) {
       scope->last_err = "illegal mul: non-integer arg";
       return 1;
@@ -1004,13 +1006,13 @@ NL_BUILTIN(div) {
     scope->last_err = "illegal div: non-pair args";
     return 1;
   }
-  if (nl_evalq(scope, cell.value.as_pair[0], result)) return 1;
-  if (cell.value.as_pair[1].type == NL_NIL) {
+  if (nl_evalq(scope, NL_HEAD(cell), result)) return 1;
+  if (NL_TAIL(cell).type == NL_NIL) {
     result->value.as_integer = 1 / result->value.as_integer;
     return 0;
   }
   NL_FOREACH(cell.value.as_pair + 1, tail) {
-    if (nl_evalq(scope, tail->value.as_pair[0], &val)) return 1;
+    if (nl_evalq(scope, NL_HEAD_AT(tail), &val)) return 1;
     if (val.type != NL_INTEGER) {
       scope->last_err = "illegal div: non-integer arg";
       return 1;
@@ -1030,10 +1032,10 @@ NL_BUILTIN(printq) {
     *result = cell;
     return 0;
   case NL_PAIR:
-    if (nl_printq(scope, cell.value.as_pair[0], result)) return 1;
-    if (cell.value.as_pair[1].type == NL_NIL) return 0;
-    fprintf(scope->stdout, cell.value.as_pair[1].type == NL_PAIR ? " " : ", ");
-    return nl_printq(scope, cell.value.as_pair[1], result);
+    if (nl_printq(scope, NL_HEAD(cell), result)) return 1;
+    if (NL_TAIL(cell).type == NL_NIL) return 0;
+    fprintf(scope->stdout, NL_TAIL(cell).type == NL_PAIR ? " " : ", ");
+    return nl_printq(scope, NL_TAIL(cell), result);
   case NL_SYMBOL:
     fprintf(scope->stdout, "%s", cell.value.as_symbol);
     *result = cell;
@@ -1048,9 +1050,9 @@ NL_BUILTIN(print) {
   if (cell.type != NL_PAIR)
     return nl_evalq(scope, cell, result) || nl_printq(scope, cell, result);
   NL_FOREACH(&cell, tail) {
-    if (nl_evalq(scope, tail->value.as_pair[0], &val)) return 1;
+    if (nl_evalq(scope, NL_HEAD_AT(tail), &val)) return 1;
     if (nl_printq(scope, val, result)) return 1;
-    if (tail->value.as_pair[1].type == NL_PAIR) fputc(' ', scope->stdout);
+    if (NL_TAIL_AT(tail).type == NL_PAIR) fputc(' ', scope->stdout);
   }
   if (tail->type != NL_NIL) {
     fprintf(scope->stdout, ", ");
@@ -1065,12 +1067,12 @@ NL_BUILTIN(defq) {
     scope->last_err = "illegal defq: non-pair args";
     return 1;
   }
-  name = cell.value.as_pair[0];
+  name = NL_HEAD(cell);
   if (name.type != NL_SYMBOL) {
     scope->last_err = "illegal defq: non-symbol name";
     return 1;
   }
-  body = cell.value.as_pair[1];
+  body = NL_TAIL(cell);
   if (body.type != NL_PAIR) {
     scope->last_err = "illegal defq: non-pair body";
     return 1;
@@ -1087,18 +1089,18 @@ NL_BUILTIN(set) {
     scope->last_err = "illegal set call: non-pair args";
     return 1;
   }
-  for (tail = &cell; tail->type == NL_PAIR; tail = tail->value.as_pair[1].value.as_pair + 1) {
-    if (nl_evalq(scope, tail->value.as_pair[0], &var)) return 1;
+  for (tail = &cell; tail->type == NL_PAIR; tail = NL_TAIL_AT(tail).value.as_pair + 1) {
+    if (nl_evalq(scope, NL_HEAD_AT(tail), &var)) return 1;
     if (var.type != NL_SYMBOL) {
       scope->last_err = "illegal set call: non-symbol var";
       return 1;
     }
-    if (tail->value.as_pair[1].type != NL_PAIR) {
-      if (nl_evalq(scope, tail->value.as_pair[1], result)) return 1;
+    if (NL_TAIL_AT(tail).type != NL_PAIR) {
+      if (nl_evalq(scope, NL_TAIL_AT(tail), result)) return 1;
       nl_scope_put(scope, var.value.as_symbol, *result);
       return 0;
     }
-    if (nl_evalq(scope, tail->value.as_pair[1].value.as_pair[0], result)) return 1;
+    if (nl_evalq(scope, NL_HEAD(NL_TAIL_AT(tail)), result)) return 1;
     nl_scope_put(scope, var.value.as_symbol, *result);
   }
   return 0;
@@ -1120,7 +1122,7 @@ NL_BUILTIN(writeq) {
     return 0;
   case NL_PAIR:
     fputc('(', scope->stdout);
-    if (nl_writeq(scope, cell.value.as_pair[0], result)) return 1;
+    if (nl_writeq(scope, NL_HEAD(cell), result)) return 1;
     tail = cell.value.as_pair + 1;
     for (;;) {
       switch (tail->type) {
@@ -1130,7 +1132,7 @@ NL_BUILTIN(writeq) {
         return 0;
       case NL_PAIR:
         fputc(' ', scope->stdout);
-        if (nl_writeq(scope, tail->value.as_pair[0], result)) return 1;
+        if (nl_writeq(scope, NL_HEAD_AT(tail), result)) return 1;
         tail = tail->value.as_pair + 1;
         break;
       case NL_INTEGER:
@@ -1152,7 +1154,7 @@ NL_BUILTIN(write) {
     scope->last_err = "illegal write call: non-pair args";
     return 1;
   }
-  if (nl_evalq(scope, cell.value.as_pair[0], result)) return 1;
+  if (nl_evalq(scope, NL_HEAD(cell), result)) return 1;
   return nl_writeq(scope, *result, result);
 }
 NL_BUILTIN(and) {
@@ -1162,7 +1164,7 @@ NL_BUILTIN(and) {
     return 1;
   }
   NL_FOREACH(&cell, tail) {
-    if (nl_evalq(scope, tail->value.as_pair[0], result)) return 1;
+    if (nl_evalq(scope, NL_HEAD_AT(tail), result)) return 1;
     if (result->type == NL_NIL) return 0;
   }
   return 0;
@@ -1174,7 +1176,7 @@ NL_BUILTIN(or) {
     return 1;
   }
   NL_FOREACH(&cell, tail) {
-    if (nl_evalq(scope, tail->value.as_pair[0], result)) return 1;
+    if (nl_evalq(scope, NL_HEAD_AT(tail), result)) return 1;
     if (result->type != NL_NIL) return 0;
   }
   return 0;
@@ -1192,7 +1194,7 @@ NL_BUILTIN(write_bytes) {
       || nl_write_bytes(scope, *result, result);
   case NL_PAIR:
     NL_FOREACH(&cell, a) {
-      if (nl_evalq(scope, a->value.as_pair[0], result)) return 1;
+      if (nl_evalq(scope, NL_HEAD_AT(a), result)) return 1;
       if (nl_write_bytes(scope, *result, result)) return 1;
     }
     return nl_write_bytes(scope, *a, result);
@@ -1213,7 +1215,7 @@ NL_BUILTIN(write_wbytes) {
       || nl_write_wbytes(scope, *result, result);
   case NL_PAIR:
     NL_FOREACH(&cell, a) {
-      if (nl_evalq(scope, a->value.as_pair[0], result)) return 1;
+      if (nl_evalq(scope, NL_HEAD_AT(a), result)) return 1;
       if (nl_write_wbytes(scope, *result, result)) return 1;
     }
     return nl_write_wbytes(scope, *a, result);
