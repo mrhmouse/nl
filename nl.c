@@ -342,6 +342,8 @@ void nl_scope_link(struct nl_scope *child, struct nl_scope *parent) {
 #define NL_BUILTIN(name) int nl_ ## name(struct nl_scope *scope, struct nl_cell cell, struct nl_cell *result)
 #define NL_FOREACH(start, a) for (a = start; a->type == NL_PAIR; a = a->value.as_pair + 1)
 #define NL_DEF_BUILTIN(sym, name) nl_scope_put(scope, nl_intern(strdup(sym)), nl_cell_as_int((int64_t)nl_ ## name))
+#define NL_HEAD(cell) cell.value.as_pair[0]
+#define NL_TAIL(cell) cell.value.as_pair[1]
 NL_BUILTIN(evalq);
 int nl_setqe(struct nl_scope *target_scope, struct nl_scope *eval_scope, struct nl_cell args, struct nl_cell *result) {
   struct nl_cell *tail;
@@ -400,64 +402,122 @@ NL_BUILTIN(letq) {
   if (tail->type != NL_NIL) return nl_evalq(&body_scope, *tail, result);
   return 0;
 }
-NL_BUILTIN(call) {
-  struct nl_cell head, letq_tag, *args, *vars, *params;
-  if (nl_evalq(scope, cell.value.as_pair[0], &head)) return 1;
- call_retry:
-  switch (head.type) {
-  case NL_NIL:
-    scope->last_err = "illegal function call: cannot invoke nil";
-    return 1;
-  case NL_INTEGER:
-    return ((nl_native_func)head.value.as_integer)(scope, cell.value.as_pair[1], result);
-  case NL_SYMBOL:
-    if (nl_evalq(scope, head, &head)) return 1;
-    goto call_retry;
-  case NL_PAIR:
-    if (head.value.as_pair[1].type != NL_PAIR) {
-      scope->last_err = "illegal lambda call: non-pair lambda body";
-      return 1;
-    }
-    letq_tag = nl_cell_as_pair(nl_cell_as_nil(), head.value.as_pair[1]);
-    vars = letq_tag.value.as_pair;
-    switch (head.value.as_pair[0].type) {
-    case NL_PAIR:
-      args = cell.value.as_pair + 1;
-      params = head.value.as_pair;
-      *vars = nl_cell_as_pair(nl_cell_as_nil(), nl_cell_as_nil());
-      for (;;) {
-        if (args->type != NL_PAIR || params->type != NL_PAIR) {
-          // out of args or params
-          while (params->type == NL_PAIR) {
-            vars->value.as_pair[0] = params->value.as_pair[0];
-            vars->value.as_pair[1] = nl_cell_as_pair(nl_cell_as_nil(), nl_cell_as_pair(nl_cell_as_nil(), nl_cell_as_nil()));
-            vars = vars->value.as_pair[1].value.as_pair + 1;
-            params = params->value.as_pair + 1;
-          }
-          *vars = nl_cell_as_nil();
-          return nl_letq(scope, letq_tag, result);
-        }
-        vars->value.as_pair[0] = params->value.as_pair[0];
-        vars->value.as_pair[1] = nl_cell_as_pair(args->value.as_pair[0], nl_cell_as_pair(nl_cell_as_nil(), nl_cell_as_nil()));
-        vars = vars->value.as_pair[1].value.as_pair + 1;
-        args = args->value.as_pair + 1;
-        params = params->value.as_pair + 1;
-      }
-    case NL_SYMBOL:
-      *vars = nl_cell_as_pair(head.value.as_pair[0],
-                              nl_cell_as_pair(nl_cell_as_pair(nl_cell_as_symbol(nl_intern(strdup("quote"))),
-                                                              cell.value.as_pair[1]),
-                                              nl_cell_as_nil()));
-    case NL_NIL:
-      return nl_letq(scope, letq_tag, result);
-    default:
-      scope->last_err = "illegal lambda call: non-pair parameter list";
-      return 1;
-    }
-  default:
-    scope->last_err = "unknown cell type";
+//
+//     > (callq ((A B C) (print (+ A B) C)) 1 2 hello)
+//     3 hello
+//     ; hello
+//
+NL_BUILTIN(callq) {
+  struct nl_cell *p, *a;
+  struct nl_scope call_scope;
+  if (cell.type != NL_PAIR) {
+    scope->last_err = "illegal callq: non-pair args";
     return 1;
   }
+ retry:
+  switch (NL_HEAD(cell).type) {
+  case NL_SYMBOL:
+    nl_scope_get(scope, NL_HEAD(cell).value.as_symbol, cell.value.as_pair);
+    goto retry;
+  case NL_PAIR:
+    nl_scope_init(&call_scope);
+    switch (NL_HEAD(NL_HEAD(cell)).type) {
+    case NL_SYMBOL:
+      nl_scope_put(&call_scope, NL_HEAD(NL_HEAD(cell)).value.as_symbol, NL_TAIL(cell));
+      break;
+    case NL_PAIR:
+      a = &NL_TAIL(cell);
+      NL_FOREACH(&NL_HEAD(NL_HEAD(cell)), p) {
+        if (p->value.as_pair[0].type != NL_SYMBOL) {
+          scope->last_err = "illegal callq: non-symbol parameter in lambda";
+          return 1;
+        }
+        if (a->type == NL_PAIR) {
+          nl_scope_put(&call_scope, p->value.as_pair[0].value.as_symbol, a->value.as_pair[0]);
+          a = a->value.as_pair + 1;
+        } else if (a->type == NL_NIL) {
+          nl_scope_put(&call_scope, p->value.as_pair[0].value.as_symbol, *a);
+        } else {
+          nl_scope_put(&call_scope, p->value.as_pair[0].value.as_symbol, *a);
+          a->type = NL_NIL;
+        }
+      }
+      break;
+    case NL_NIL:
+      break;
+    default:
+      scope->last_err = "illegal callq: illegal parameter list in lambda";
+      return 1;
+    }
+    nl_scope_link(&call_scope, scope);
+    NL_FOREACH(&NL_TAIL(NL_HEAD(cell)), p) {
+      if (nl_evalq(&call_scope, p->value.as_pair[0], result)) return 1;
+    }
+    return 0;
+  case NL_INTEGER:
+    return ((nl_native_func)NL_HEAD(cell).value.as_integer)(scope, NL_TAIL(cell), result);
+  default:
+    scope->last_err = "illegal callq: uncallable cell type";
+    return 1;
+  }
+}
+NL_BUILTIN(writeq);
+NL_BUILTIN(call) {
+  struct nl_cell *p, *a, v;
+  struct nl_scope call_scope;
+  if (cell.type != NL_PAIR) {
+    scope->last_err = "illegal call: non-pair args";
+    return 1;
+  }
+ retry:
+  switch (NL_HEAD(cell).type) {
+  case NL_SYMBOL:
+    nl_scope_get(scope, NL_HEAD(cell).value.as_symbol, cell.value.as_pair);
+    goto retry;
+  case NL_INTEGER:
+    return ((nl_native_func)NL_HEAD(cell).value.as_integer)(scope, NL_TAIL(cell), result);
+  case NL_NIL:
+    scope->last_err = "illegal callq: cannot invoke nil";
+    return 1;
+  default:
+    break;
+  }
+  nl_scope_init(&call_scope);
+  switch (NL_HEAD(NL_HEAD(cell)).type) {
+  case NL_SYMBOL:
+    nl_scope_put(&call_scope, NL_HEAD(NL_HEAD(cell)).value.as_symbol, NL_TAIL(cell));
+    break;
+  case NL_PAIR:
+    a = &NL_TAIL(cell);
+    NL_FOREACH(&NL_HEAD(NL_HEAD(cell)), p) {
+      if (p->value.as_pair[0].type != NL_SYMBOL) {
+        scope->last_err = "illegal call: non-symbol parameter in lambda";
+        return 1;
+      }
+      if (a->type == NL_PAIR) {
+        if (nl_evalq(scope, a->value.as_pair[0], &v)) return 1;
+        nl_scope_put(&call_scope, p->value.as_pair[0].value.as_symbol, v);
+        a = a->value.as_pair + 1;
+      } else if (a->type == NL_NIL) {
+        nl_scope_put(&call_scope, p->value.as_pair[0].value.as_symbol, *a);
+      } else {
+        if (nl_evalq(scope, *a, &v)) return 1;
+        nl_scope_put(&call_scope, p->value.as_pair[0].value.as_symbol, v);
+        a->type = NL_NIL;
+      }
+    }
+    break;
+  case NL_NIL:
+    break;
+  default:
+    scope->last_err = "illegal call: illegal parameter list in lambda";
+    return 1;
+  }
+  nl_scope_link(&call_scope, scope);
+  NL_FOREACH(&NL_TAIL(NL_HEAD(cell)), p) {
+    if (nl_evalq(&call_scope, p->value.as_pair[0], result)) return 1;
+  }
+  return 0;
 }
 NL_BUILTIN(evalq) {
   switch (cell.type) {
@@ -552,7 +612,7 @@ NL_BUILTIN(eval) {
   return 0;
 }
 NL_BUILTIN(foreach) {
-  struct nl_cell list, *a, funcall[7];
+  struct nl_cell list, *a, funcall[5];
   if (cell.type != NL_PAIR) {
     scope->last_err = "illegal foreach: non-pair args";
     return 1;
@@ -564,86 +624,73 @@ NL_BUILTIN(foreach) {
   if (nl_evalq(scope, cell.value.as_pair[1].value.as_pair[0], &list)) return 1;
   // we want to represent this structure, with a blank (???) for each item
   //
-  //     ((quote . Fun) . ???)
+  //     (Fun ???)
   //
-  // other than interning the "quote" symbol, we want to avoid heap allocation
-  // so we encode this as a flat array of cells. to make it easier to read,
-  // here is the same structure with labels for each cell we'll need
+  // we want to avoid heap allocation, so we encode this as a flat array of cells.
+  // to make it easier to read, here is the same structure with labels for each cell,
+  // and lists exploded into dotted pairs
   //
-  //     A C              E      G
-  //     | |              |      |
-  //     ((quote . Fun) . (??? . nil))
-  //      |        |       |
-  //      B        D       F
-  //
-  //     A: a pair which is passed to evalq, representing the call
-  //     B: a pair which contains the quoted function
-  //     C: the "quote" symbol
-  //     D: the function
-  //     E: a pair containing the blank slow
-  //     F: a blank slot for the item
-  //     G: a final nil
+  //     A      C      E
+  //     |      |      |
+  //     (Fun . (??? . nil))
+  //      |      |
+  //      B      D
   //
   // when we encode this into an array, we take into account the fact that the
   // head and tail of pairs are expected to be adjacent in memory. this leaves
   // the following configuration:
   //
-  //     A B E C D F G
-  //     0 1 2 3 4 5 6
-  if (nl_evalq(scope, cell.value.as_pair[0], funcall + 4)) return 1;
+  //     A B C D E
+  //     0 1 2 3 4
+  if (nl_evalq(scope, cell.value.as_pair[0], funcall + 1)) return 1;
   funcall[0].type = NL_PAIR;
   funcall[0].value.as_pair = funcall + 1;
-  funcall[1].type = NL_PAIR;
-  funcall[1].value.as_pair = funcall + 3;
   funcall[2].type = NL_PAIR;
-  funcall[2].value.as_pair = funcall + 5;
-  funcall[3].type = NL_SYMBOL;
-  funcall[3].value.as_symbol = nl_intern(strdup("quote"));
-  funcall[6].type = NL_NIL;
+  funcall[2].value.as_pair = funcall + 3;
+  funcall[4].type = NL_NIL;
   NL_FOREACH(&list, a) {
-    funcall[5] = a->value.as_pair[0];
-    if (nl_evalq(scope, *funcall, result)) return 1;
+    funcall[3] = a->value.as_pair[0];
+    if (nl_callq(scope, *funcall, result)) return 1;
   }
   return 0;
 }
 NL_BUILTIN(map) {
-  struct nl_cell list, *a, funcall[7];
+  struct nl_cell fun, list, *item, call;
   if (cell.type != NL_PAIR) {
     scope->last_err = "illegal map: non-pair args";
     return 1;
   }
-  if (cell.value.as_pair[1].type != NL_PAIR) {
+  if (NL_TAIL(cell).type != NL_PAIR) {
     scope->last_err = "illegal map: expected at least two args in list";
     return 1;
   }
-  if (nl_evalq(scope, cell.value.as_pair[1].value.as_pair[0], &list)) return 1;
-  if (nl_evalq(scope, cell.value.as_pair[0], funcall + 4)) return 1;
-  funcall[0].type = NL_PAIR;
-  funcall[0].value.as_pair = funcall + 1;
-  funcall[1].type = NL_PAIR;
-  funcall[1].value.as_pair = funcall + 3;
-  funcall[2].type = NL_PAIR;
-  funcall[2].value.as_pair = funcall + 5;
-  funcall[3].type = NL_SYMBOL;
-  funcall[3].value.as_symbol = nl_intern(strdup("quote"));
-  funcall[6].type = NL_NIL;
+  if (nl_evalq(scope, NL_HEAD(cell), &fun)) return 1;
+  if (nl_evalq(scope, NL_HEAD(NL_TAIL(cell)), &list)) return 1;
+  if (list.type != NL_PAIR) {
+    scope->last_err = "illegal map: second argument should be a pair";
+    return 1;
+  }
   *result = nl_cell_as_pair(nl_cell_as_nil(), nl_cell_as_nil());
-  NL_FOREACH(&list, a) {
-    funcall[5] = a->value.as_pair[0];
-    if (nl_evalq(scope, *funcall, result->value.as_pair)) return 1;
-    if (a->value.as_pair[1].type != NL_NIL) {
+  call = nl_cell_as_pair(fun, nl_cell_as_nil());
+  NL_FOREACH(&list, item) {
+    NL_TAIL(call) = item->value.as_pair[0];
+    if (nl_callq(scope, call, result->value.as_pair)) return 1;
+    switch (item->value.as_pair[1].type) {
+    case NL_NIL:
+      break;
+    case NL_PAIR:
       result->value.as_pair[1] = nl_cell_as_pair(nl_cell_as_nil(), nl_cell_as_nil());
       result = result->value.as_pair + 1;
-      if (a->value.as_pair[1].type != NL_PAIR) {
-        funcall[5] = a->value.as_pair[1];
-        return nl_evalq(scope, *funcall, result->value.as_pair + 1);
-      }
+      break;
+    default:
+      NL_TAIL(call) = item->value.as_pair[1];
+      return nl_callq(scope, call, result->value.as_pair + 1);
     }
   }
   return 0;
 }
 NL_BUILTIN(filter) {
-  struct nl_cell list, *a, funcall[7];
+  struct nl_cell list, *a, funcall[5];
   if (cell.type != NL_PAIR) {
     scope->last_err = "illegal filter: non-pair args";
     return 1;
@@ -653,20 +700,16 @@ NL_BUILTIN(filter) {
     return 1;
   }
   if (nl_evalq(scope, cell.value.as_pair[1].value.as_pair[0], &list)) return 1;
-  if (nl_evalq(scope, cell.value.as_pair[0], funcall + 4)) return 1;
+  if (nl_evalq(scope, cell.value.as_pair[0], funcall + 1)) return 1;
   funcall[0].type = NL_PAIR;
   funcall[0].value.as_pair = funcall + 1;
-  funcall[1].type = NL_PAIR;
-  funcall[1].value.as_pair = funcall + 3;
   funcall[2].type = NL_PAIR;
-  funcall[2].value.as_pair = funcall + 5;
-  funcall[3].type = NL_SYMBOL;
-  funcall[3].value.as_symbol = nl_intern(strdup("quote"));
-  funcall[6].type = NL_NIL;
+  funcall[2].value.as_pair = funcall + 3;
+  funcall[4].type = NL_NIL;
   *result = nl_cell_as_pair(nl_cell_as_nil(), nl_cell_as_nil());
   NL_FOREACH(&list, a) {
-    funcall[5] = a->value.as_pair[0];
-    if (nl_evalq(scope, *funcall, result->value.as_pair)) return 1;
+    funcall[3] = a->value.as_pair[0];
+    if (nl_callq(scope, *funcall, result->value.as_pair)) return 1;
     if (result->value.as_pair[0].type != NL_NIL) {
       result->value.as_pair[0] = a->value.as_pair[0];
       result->value.as_pair[1] = nl_cell_as_pair(nl_cell_as_nil(), nl_cell_as_nil());
@@ -679,12 +722,64 @@ NL_BUILTIN(filter) {
       *result = nl_cell_as_nil();
       break;
     default:
-      funcall[5] = a->value.as_pair[1];
-      if (nl_evalq(scope, *funcall, result->value.as_pair + 1)) return 1;
+      funcall[3] = a->value.as_pair[1];
+      if (nl_callq(scope, *funcall, result->value.as_pair + 1)) return 1;
       if (result->value.as_pair[1].type != NL_NIL) {
         result->value.as_pair[1] = a->value.as_pair[1];
       }
       break;
+    }
+  }
+  return 0;
+}
+NL_BUILTIN(reduce) {
+  struct nl_cell list, *a, funcall[7];
+  if (cell.type != NL_PAIR) {
+    scope->last_err = "illegal reduce: non-pair args";
+    return 1;
+  }
+  if (NL_TAIL(cell).type != NL_PAIR) {
+    scope->last_err = "illegal reduce: expected at least three args in list";
+    return 1;
+  }
+  if (NL_TAIL(NL_TAIL(cell)).type != NL_PAIR) {
+    scope->last_err = "illegal reduce: expected at least three args in list";
+    return 1;
+  }
+  if (nl_evalq(scope, NL_HEAD(NL_TAIL(NL_TAIL(cell))), &list)) return 1;
+  // as with foreach, we want to evaluate a function call. however, we have an extra argument
+  //
+  //     (Fun ??? ???)
+  //
+  //     A      C      E      G
+  //     |      |      |      |
+  //     (Fun . (??? . (??? . nil)))
+  //      |      |      |
+  //      B      D      F
+  //
+  //     A B C D E F G
+  //     0 1 2 3 4 5 6
+  if (nl_evalq(scope, NL_HEAD(cell), funcall + 1)) return 1;
+  funcall[0].type = NL_PAIR;
+  funcall[0].value.as_pair = funcall + 1;
+  funcall[2].type = NL_PAIR;
+  funcall[2].value.as_pair = funcall + 3;
+  funcall[4].type = NL_PAIR;
+  funcall[4].value.as_pair = funcall + 5;
+  funcall[6].type = NL_NIL;
+  if (nl_evalq(scope, NL_HEAD(NL_TAIL(cell)), result)) return 1;
+  NL_FOREACH(&list, a) {
+    funcall[3] = a->value.as_pair[0];
+    funcall[5] = *result;
+    if (nl_callq(scope, *funcall, result)) return 1;
+    switch (a->value.as_pair[1].type) {
+    case NL_PAIR:
+    case NL_NIL:
+      break;
+    default:
+      funcall[3] = a->value.as_pair[1];
+      funcall[5] = *result;
+      return nl_callq(scope, *funcall, result);
     }
   }
   return 0;
@@ -1256,6 +1351,7 @@ void nl_scope_define_builtins(struct nl_scope *scope) {
   NL_DEF_BUILTIN("print", print);
   NL_DEF_BUILTIN("printq", printq);
   NL_DEF_BUILTIN("quote", quote);
+  NL_DEF_BUILTIN("reduce", reduce);
   NL_DEF_BUILTIN("set", set);
   NL_DEF_BUILTIN("setq", setq);
   NL_DEF_BUILTIN("symbol?", is_symbol);
