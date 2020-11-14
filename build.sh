@@ -1,3 +1,3 @@
 #!/bin/sh
-
-exec gcc -lgc -Wall nl.c -o nl
+set -e
+gcc -lgc -Wall nl.c -o nl
