@@ -756,9 +756,9 @@ NL_BUILTIN(tail) {
     *result = nl_cell_as_nil();
   return 0;
 }
-NL_BUILTIN(cons) {
+NL_BUILTIN(pair) {
   if (cell.type != NL_PAIR) {
-    scope->last_err = "illegal cons: non-pair args";
+    scope->last_err = "illegal pair: non-pair args";
     return 1;
   }
   *result = nl_cell_as_pair(nl_cell_as_nil(), nl_cell_as_nil());
@@ -1100,7 +1100,7 @@ void nl_scope_define_builtins(struct nl_scope *scope) {
   NL_DEF_BUILTIN(">=", gte);
   NL_DEF_BUILTIN("and", and);
   NL_DEF_BUILTIN("apply", apply);
-  NL_DEF_BUILTIN("cons", cons);
+  NL_DEF_BUILTIN("pair", pair);
   NL_DEF_BUILTIN("defq", defq);
   NL_DEF_BUILTIN("eval", eval);
   NL_DEF_BUILTIN("head", head);
