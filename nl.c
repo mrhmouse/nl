@@ -400,7 +400,7 @@ NL_BUILTIN(letq) {
     if (nl_setqe(&body_scope, scope, vars, result)) return 1;
   }
   nl_scope_link(&body_scope, scope);
-  for (tail = &body; tail->type == NL_PAIR; tail = tail->value.as_pair + 1) {
+  NL_FOREACH(&body, tail) {
     if (nl_evalq(&body_scope, tail->value.as_pair[0], result)) return 1;
   }
   if (tail->type != NL_NIL) return nl_evalq(&body_scope, *tail, result);
@@ -550,7 +550,7 @@ NL_BUILTIN(eval) {
     scope->last_err = "illegal eval: non-pair args";
     return 1;
   }
-  for (tail = &cell; tail->type == NL_PAIR; tail = tail->value.as_pair + 1) {
+  NL_FOREACH(&cell, tail) {
     if (nl_evalq(scope, tail->value.as_pair[0], &form)) return 1;
     if (nl_evalq(scope, form, result)) return 1;
   }
@@ -687,7 +687,7 @@ NL_BUILTIN(equal) {
     return 0;
   }
   if (nl_evalq(scope, cell.value.as_pair[0], &last)) return 1;
-  for (tail = cell.value.as_pair + 1; tail->type == NL_PAIR; tail = tail->value.as_pair + 1) {
+  NL_FOREACH(cell.value.as_pair + 1, tail) {
     if (nl_evalq(scope, tail->value.as_pair[0], &val)) return 1;
     if (!nl_cell_equal(last, val)) {
       *result = nl_cell_as_nil();
@@ -700,7 +700,7 @@ NL_BUILTIN(equal) {
 int64_t nl_list_length(struct nl_cell l) {
   int64_t len = 0;
   struct nl_cell *p;
-  for (p = &l; p->type == NL_PAIR; p = p->value.as_pair +1) {
+  NL_FOREACH(&l, p) {
     ++len;
   }
   if (p->type != NL_NIL) ++len;
@@ -787,12 +787,13 @@ NL_BUILTIN(lt) {
     return 0;
   }
   if (nl_evalq(scope, cell.value.as_pair[0], &a)) return 1;
-  for (p = cell.value.as_pair + 1; p->type == NL_PAIR; p = p->value.as_pair + 1, a = b) {
+  NL_FOREACH(cell.value.as_pair + 1, p) {
     if (nl_evalq(scope, p->value.as_pair[0], &b)) return 1;
     if (nl_compare(a, b) != -1) {
       *result = nl_cell_as_nil();
       return 0;
     }
+    a = b;
   }
   *result = nl_cell_as_symbol(nl_intern(strdup("t")));
   return 0;
@@ -804,12 +805,13 @@ NL_BUILTIN(gt) {
     return 0;
   }
   if (nl_evalq(scope, cell.value.as_pair[0], &a)) return 1;
-  for (p = cell.value.as_pair + 1; p->type == NL_PAIR; p = p->value.as_pair + 1, a = b) {
+  NL_FOREACH(cell.value.as_pair + 1, p) {
     if (nl_evalq(scope, p->value.as_pair[0], &b)) return 1;
     if (nl_compare(a, b) != 1) {
       *result = nl_cell_as_nil();
       return 0;
     }
+    a = b;
   }
   *result = nl_cell_as_symbol(nl_intern(strdup("t")));
   return 0;
@@ -821,12 +823,13 @@ NL_BUILTIN(lte) {
     return 0;
   }
   if (nl_evalq(scope, cell.value.as_pair[0], &a)) return 1;
-  for (p = cell.value.as_pair + 1; p->type == NL_PAIR; p = p->value.as_pair + 1, a = b) {
+  NL_FOREACH(cell.value.as_pair + 1, p) {
     if (nl_evalq(scope, p->value.as_pair[0], &b)) return 1;
     if (nl_compare(a, b) == 1) {
       *result = nl_cell_as_nil();
       return 0;
     }
+    a = b;
   }
   *result = nl_cell_as_symbol(nl_intern(strdup("t")));
   return 0;
@@ -838,12 +841,13 @@ NL_BUILTIN(gte) {
     return 0;
   }
   if (nl_evalq(scope, cell.value.as_pair[0], &a)) return 1;
-  for (p = cell.value.as_pair + 1; p->type == NL_PAIR; p = p->value.as_pair + 1, a = b) {
+  NL_FOREACH(cell.value.as_pair + 1, p) {
     if (nl_evalq(scope, p->value.as_pair[0], &b)) return 1;
     if (nl_compare(a, b) == -1) {
       *result = nl_cell_as_nil();
       return 0;
     }
+    a = b;
   }
   *result = nl_cell_as_symbol(nl_intern(strdup("t")));
   return 0;
@@ -904,7 +908,7 @@ NL_BUILTIN(list) {
     return 0;
   }
   *result = nl_cell_as_pair(nl_cell_as_nil(), nl_cell_as_nil());
-  for (in_tail = &cell; in_tail->type == NL_PAIR; in_tail = in_tail->value.as_pair + 1) {
+  NL_FOREACH(&cell, in_tail) {
     if (nl_evalq(scope, in_tail->value.as_pair[0], out_tail->value.as_pair)) return 1;
     if (in_tail->value.as_pair[1].type != NL_PAIR) {
       return nl_evalq(scope, in_tail->value.as_pair[1], out_tail->value.as_pair + 1);
@@ -929,7 +933,7 @@ NL_BUILTIN(add) {
     scope->last_err = "illegal add: non-integer arg";
     return 1;
   }
-  for (tail = cell.value.as_pair + 1; tail->type == NL_PAIR; tail = tail->value.as_pair + 1) {
+  NL_FOREACH(cell.value.as_pair + 1, tail) {
     if (nl_evalq(scope, tail->value.as_pair[0], &val)) return 1;
     if (val.type != NL_INTEGER) {
       scope->last_err = "illegal add: non-integer arg";
@@ -958,7 +962,7 @@ NL_BUILTIN(sub) {
     scope->last_err = "illegal sub: non-integer arg";
     return 1;
   }
-  for (tail = cell.value.as_pair + 1; tail->type == NL_PAIR; tail = tail->value.as_pair + 1) {
+  NL_FOREACH(cell.value.as_pair + 1, tail) {
     if (nl_evalq(scope, tail->value.as_pair[0], &val)) return 1;
     if (val.type != NL_INTEGER) {
       scope->last_err = "illegal sub: non-integer arg";
@@ -979,7 +983,7 @@ NL_BUILTIN(mul) {
     scope->last_err = "illegal mul: non-pair args";
     return 1;
   }
-  for (tail = &cell; tail->type == NL_PAIR; tail = tail->value.as_pair + 1) {
+  NL_FOREACH(&cell, tail) {
     if (nl_evalq(scope, tail->value.as_pair[0], &val)) return 1;
     if (val.type != NL_INTEGER) {
       scope->last_err = "illegal mul: non-integer arg";
@@ -1005,7 +1009,7 @@ NL_BUILTIN(div) {
     result->value.as_integer = 1 / result->value.as_integer;
     return 0;
   }
-  for (tail = cell.value.as_pair + 1; tail->type == NL_PAIR; tail = tail->value.as_pair + 1) {
+  NL_FOREACH(cell.value.as_pair + 1, tail) {
     if (nl_evalq(scope, tail->value.as_pair[0], &val)) return 1;
     if (val.type != NL_INTEGER) {
       scope->last_err = "illegal div: non-integer arg";
@@ -1043,7 +1047,7 @@ NL_BUILTIN(print) {
   struct nl_cell val, *tail;
   if (cell.type != NL_PAIR)
     return nl_evalq(scope, cell, result) || nl_printq(scope, cell, result);
-  for (tail = &cell; tail->type == NL_PAIR; tail = tail->value.as_pair + 1) {
+  NL_FOREACH(&cell, tail) {
     if (nl_evalq(scope, tail->value.as_pair[0], &val)) return 1;
     if (nl_printq(scope, val, result)) return 1;
     if (tail->value.as_pair[1].type == NL_PAIR) fputc(' ', scope->stdout);
@@ -1157,7 +1161,7 @@ NL_BUILTIN(and) {
     scope->last_err = "illegal and: non-pair args";
     return 1;
   }
-  for (tail = &cell; tail->type == NL_PAIR; tail = tail->value.as_pair + 1) {
+  NL_FOREACH(&cell, tail) {
     if (nl_evalq(scope, tail->value.as_pair[0], result)) return 1;
     if (result->type == NL_NIL) return 0;
   }
@@ -1169,7 +1173,7 @@ NL_BUILTIN(or) {
     scope->last_err = "illegal or: non-pair args";
     return 1;
   }
-  for (tail = &cell; tail->type == NL_PAIR; tail = tail->value.as_pair + 1) {
+  NL_FOREACH(&cell, tail) {
     if (nl_evalq(scope, tail->value.as_pair[0], result)) return 1;
     if (result->type != NL_NIL) return 0;
   }
