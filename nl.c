@@ -642,6 +642,53 @@ NL_BUILTIN(map) {
   }
   return 0;
 }
+NL_BUILTIN(filter) {
+  struct nl_cell list, *a, funcall[7];
+  if (cell.type != NL_PAIR) {
+    scope->last_err = "illegal filter: non-pair args";
+    return 1;
+  }
+  if (cell.value.as_pair[1].type != NL_PAIR) {
+    scope->last_err = "illegal filter: expected at least two args in list";
+    return 1;
+  }
+  if (nl_evalq(scope, cell.value.as_pair[1].value.as_pair[0], &list)) return 1;
+  if (nl_evalq(scope, cell.value.as_pair[0], funcall + 4)) return 1;
+  funcall[0].type = NL_PAIR;
+  funcall[0].value.as_pair = funcall + 1;
+  funcall[1].type = NL_PAIR;
+  funcall[1].value.as_pair = funcall + 3;
+  funcall[2].type = NL_PAIR;
+  funcall[2].value.as_pair = funcall + 5;
+  funcall[3].type = NL_SYMBOL;
+  funcall[3].value.as_symbol = nl_intern(strdup("quote"));
+  funcall[6].type = NL_NIL;
+  *result = nl_cell_as_pair(nl_cell_as_nil(), nl_cell_as_nil());
+  NL_FOREACH(&list, a) {
+    funcall[5] = a->value.as_pair[0];
+    if (nl_evalq(scope, *funcall, result->value.as_pair)) return 1;
+    if (result->value.as_pair[0].type != NL_NIL) {
+      result->value.as_pair[0] = a->value.as_pair[0];
+      result->value.as_pair[1] = nl_cell_as_pair(nl_cell_as_nil(), nl_cell_as_nil());
+      result = result->value.as_pair + 1;
+    }
+    switch (a->value.as_pair[1].type) {
+    case NL_PAIR:
+      break;
+    case NL_NIL:
+      *result = nl_cell_as_nil();
+      break;
+    default:
+      funcall[5] = a->value.as_pair[1];
+      if (nl_evalq(scope, *funcall, result->value.as_pair + 1)) return 1;
+      if (result->value.as_pair[1].type != NL_NIL) {
+        result->value.as_pair[1] = a->value.as_pair[1];
+      }
+      break;
+    }
+  }
+  return 0;
+}
 NL_BUILTIN(equal) {
   struct nl_cell *tail, last, val;
   if (cell.type != NL_PAIR) {
@@ -1194,6 +1241,7 @@ void nl_scope_define_builtins(struct nl_scope *scope) {
   NL_DEF_BUILTIN("pair", pair);
   NL_DEF_BUILTIN("defq", defq);
   NL_DEF_BUILTIN("eval", eval);
+  NL_DEF_BUILTIN("filter", filter);
   NL_DEF_BUILTIN("foreach", foreach);
   NL_DEF_BUILTIN("head", head);
   NL_DEF_BUILTIN("integer?", is_integer);
