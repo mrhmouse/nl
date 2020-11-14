@@ -551,6 +551,61 @@ NL_BUILTIN(eval) {
   }
   return 0;
 }
+NL_BUILTIN(foreach) {
+  struct nl_cell list, *a, funcall[7];
+  if (cell.type != NL_PAIR) {
+    scope->last_err = "illegal foreach: non-pair args";
+    return 1;
+  }
+  if (cell.value.as_pair[1].type != NL_PAIR) {
+    scope->last_err = "illegal foreach: expected at least two args in list";
+    return 1;
+  }
+  if (nl_evalq(scope, cell.value.as_pair[1].value.as_pair[0], &list)) return 1;
+  // we want to represent this structure, with a blank (???) for each item
+  //
+  //     ((quote . Fun) . ???)
+  //
+  // other than interning the "quote" symbol, we want to avoid heap allocation
+  // so we encode this as a flat array of cells. to make it easier to read,
+  // here is the same structure with labels for each cell we'll need
+  //
+  //     A C              E      G
+  //     | |              |      |
+  //     ((quote . Fun) . (??? . nil))
+  //      |        |       |
+  //      B        D       F
+  //
+  //     A: a pair which is passed to evalq, representing the call
+  //     B: a pair which contains the quoted function
+  //     C: the "quote" symbol
+  //     D: the function
+  //     E: a pair containing the blank slow
+  //     F: a blank slot for the item
+  //     G: a final nil
+  //
+  // when we encode this into an array, we take into account the fact that the
+  // head and tail of pairs are expected to be adjacent in memory. this leaves
+  // the following configuration:
+  //
+  //     A B E C D F G
+  //     0 1 2 3 4 5 6
+  if (nl_evalq(scope, cell.value.as_pair[0], funcall + 4)) return 1;
+  funcall[0].type = NL_PAIR;
+  funcall[0].value.as_pair = funcall + 1;
+  funcall[1].type = NL_PAIR;
+  funcall[1].value.as_pair = funcall + 3;
+  funcall[2].type = NL_PAIR;
+  funcall[2].value.as_pair = funcall + 5;
+  funcall[3].type = NL_SYMBOL;
+  funcall[3].value.as_symbol = nl_intern(strdup("quote"));
+  funcall[6].type = NL_NIL;
+  NL_FOREACH(&list, a) {
+    funcall[5] = a->value.as_pair[0];
+    if (nl_evalq(scope, *funcall, result)) return 1;
+  }
+  return 0;
+}
 NL_BUILTIN(equal) {
   struct nl_cell *tail, last, val;
   if (cell.type != NL_PAIR) {
@@ -1103,6 +1158,7 @@ void nl_scope_define_builtins(struct nl_scope *scope) {
   NL_DEF_BUILTIN("pair", pair);
   NL_DEF_BUILTIN("defq", defq);
   NL_DEF_BUILTIN("eval", eval);
+  NL_DEF_BUILTIN("foreach", foreach);
   NL_DEF_BUILTIN("head", head);
   NL_DEF_BUILTIN("integer?", is_integer);
   NL_DEF_BUILTIN("length", length);
