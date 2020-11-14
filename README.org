@@ -972,6 +972,45 @@ composed through pairs.
       }
       return 0;
     }
+    #define NL_FOREACH(start, a) for (a = start; a->type == NL_PAIR; a = a->value.as_pair + 1)
+    NL_BUILTIN(write_bytes) {
+      struct nl_cell *a;
+      switch (cell.type) {
+      case NL_INTEGER:
+        fputc((char)cell.value.as_integer, state->stdout);
+      case NL_NIL:
+        ,*result = cell;
+        return 0;
+      case NL_SYMBOL:
+        return nl_evalq(state, cell, result)
+          || nl_write_bytes(state, *result, result);
+      case NL_PAIR:
+        NL_FOREACH(&cell, a) {
+          if (nl_evalq(state, a->value.as_pair[0], result)) return 1;
+          if (nl_write_bytes(state, *result, result)) return 1;
+        }
+        return nl_write_bytes(state, *a, result);
+      }
+    }
+    NL_BUILTIN(write_wbytes) {
+      struct nl_cell *a;
+      switch (cell.type) {
+      case NL_INTEGER:
+        fputwc((wchar_t)cell.value.as_integer, state->stdout);
+      case NL_NIL:
+        ,*result = cell;
+        return 0;
+      case NL_SYMBOL:
+        return nl_evalq(state, cell, result)
+          || nl_write_wbytes(state, *result, result);
+      case NL_PAIR:
+        NL_FOREACH(&cell, a) {
+          if (nl_evalq(state, a->value.as_pair[0], result)) return 1;
+          if (nl_write_wbytes(state, *result, result)) return 1;
+        }
+        return nl_write_wbytes(state, *a, result);
+      }
+    }
     #define NL_DEF_BUILTIN(sym, name) nl_state_put(state, nl_intern(strdup(sym)), nl_cell_as_int((int64_t)nl_ ## name))
     void nl_state_define_builtins(struct nl_state *state) {
       NL_DEF_BUILTIN("pair?", is_pair);
@@ -1005,6 +1044,8 @@ composed through pairs.
       NL_DEF_BUILTIN("-", sub);
       NL_DEF_BUILTIN("*", mul);
       NL_DEF_BUILTIN("/", div);
+      NL_DEF_BUILTIN("write-bytes", write_bytes);
+      NL_DEF_BUILTIN("write-wbytes", write_wbytes);
     }
   #+END_SRC
 ** Main REPL
@@ -1028,7 +1069,7 @@ composed through pairs.
             fputs("ERROR eval\n", state->stderr);
           return 2;
         }
-        fputs("\n", state->stdout);
+        fputs("; ", state->stdout);
         nl_writeq(state, last_eval, &last_read);
       }
     }
