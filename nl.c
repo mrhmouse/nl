@@ -606,6 +606,42 @@ NL_BUILTIN(foreach) {
   }
   return 0;
 }
+NL_BUILTIN(map) {
+  struct nl_cell list, *a, funcall[7];
+  if (cell.type != NL_PAIR) {
+    scope->last_err = "illegal map: non-pair args";
+    return 1;
+  }
+  if (cell.value.as_pair[1].type != NL_PAIR) {
+    scope->last_err = "illegal map: expected at least two args in list";
+    return 1;
+  }
+  if (nl_evalq(scope, cell.value.as_pair[1].value.as_pair[0], &list)) return 1;
+  if (nl_evalq(scope, cell.value.as_pair[0], funcall + 4)) return 1;
+  funcall[0].type = NL_PAIR;
+  funcall[0].value.as_pair = funcall + 1;
+  funcall[1].type = NL_PAIR;
+  funcall[1].value.as_pair = funcall + 3;
+  funcall[2].type = NL_PAIR;
+  funcall[2].value.as_pair = funcall + 5;
+  funcall[3].type = NL_SYMBOL;
+  funcall[3].value.as_symbol = nl_intern(strdup("quote"));
+  funcall[6].type = NL_NIL;
+  *result = nl_cell_as_pair(nl_cell_as_nil(), nl_cell_as_nil());
+  NL_FOREACH(&list, a) {
+    funcall[5] = a->value.as_pair[0];
+    if (nl_evalq(scope, *funcall, result->value.as_pair)) return 1;
+    if (a->value.as_pair[1].type != NL_NIL) {
+      result->value.as_pair[1] = nl_cell_as_pair(nl_cell_as_nil(), nl_cell_as_nil());
+      result = result->value.as_pair + 1;
+      if (a->value.as_pair[1].type != NL_PAIR) {
+        funcall[5] = a->value.as_pair[1];
+        return nl_evalq(scope, *funcall, result->value.as_pair + 1);
+      }
+    }
+  }
+  return 0;
+}
 NL_BUILTIN(equal) {
   struct nl_cell *tail, last, val;
   if (cell.type != NL_PAIR) {
@@ -1164,6 +1200,7 @@ void nl_scope_define_builtins(struct nl_scope *scope) {
   NL_DEF_BUILTIN("length", length);
   NL_DEF_BUILTIN("letq", letq);
   NL_DEF_BUILTIN("list", list);
+  NL_DEF_BUILTIN("map", map);
   NL_DEF_BUILTIN("nil?", is_nil);
   NL_DEF_BUILTIN("not", not);
   NL_DEF_BUILTIN("or", or);
