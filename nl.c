@@ -136,7 +136,8 @@ struct nl_cell nl_cell_as_symbol(char *interned_symbol) {
 // Globals
 // =======
 // these values are used internally
-static struct nl_cell quote;
+static struct nl_cell nil, t, quote, unquote;
+
 // initialize a scope, defining the first value: "nil"
 void nl_scope_init(struct nl_scope *scope) {
   scope->stdout = stdout;
@@ -145,7 +146,7 @@ void nl_scope_init(struct nl_scope *scope) {
   scope->last_err = NULL;
   scope->parent_scope = NULL;
   scope->symbols = GC_malloc(sizeof(*scope->symbols));
-  scope->symbols->name = "nil";
+  scope->symbols->name = nil.value.as_symbol;
   scope->symbols->value.type = NL_NIL;
   scope->symbols->next = NULL;
 }
@@ -224,7 +225,7 @@ int nl_read(struct nl_scope *scope, struct nl_cell *result) {
     // then it is returned as the tail of a pair, with the symbol
     // `quote` as the head
     if (nl_read(scope, &head)) return 1;
-    *result = nl_cell_as_pair(nl_cell_as_symbol(nl_intern(strdup("quote"))), head);
+    *result = nl_cell_as_pair(quote, head);
     return 0;
   } else if (',' == ch) {
     // if the value is prefixed with the single-quote character,
@@ -232,7 +233,7 @@ int nl_read(struct nl_scope *scope, struct nl_cell *result) {
     // `unquote` as the head. TODO this doesn't currently do anything
     // at evaluation time, though. it might later interact with `quote`
     if (nl_read(scope, &head)) return 1;
-    *result = nl_cell_as_pair(nl_cell_as_symbol(nl_intern(strdup("unquote"))), head);
+    *result = nl_cell_as_pair(unquote, head);
     return 0;
   } else if ('(' == ch) {
     // lists are written enclosed in parentheses, and can have two or
@@ -491,7 +492,7 @@ NL_BUILTIN(quote) {
 NL_BUILTIN(is_nil) {
   if (nl_evalq(scope, cell.type == NL_PAIR ? NL_HEAD(cell) : cell, result)) return 1;
   if (result->type == NL_NIL)
-    *result = nl_cell_as_symbol(nl_intern(strdup("t")));
+    *result = t;
   else
     *result = nl_cell_as_nil();
   return 0;
@@ -499,7 +500,7 @@ NL_BUILTIN(is_nil) {
 NL_BUILTIN(is_integer) {
   if (nl_evalq(scope, cell.type == NL_PAIR ? NL_HEAD(cell) : cell, result)) return 1;
   if (result->type == NL_INTEGER)
-    *result = nl_cell_as_symbol(nl_intern(strdup("t")));
+    *result = t;
   else
     *result = nl_cell_as_nil();
   return 0;
@@ -507,7 +508,7 @@ NL_BUILTIN(is_integer) {
 NL_BUILTIN(is_pair) {
   if (nl_evalq(scope, cell.type == NL_PAIR ? NL_HEAD(cell) : cell, result)) return 1;
   if (result->type == NL_PAIR)
-    *result = nl_cell_as_symbol(nl_intern(strdup("t")));
+    *result = t;
   else
     *result = nl_cell_as_nil();
   return 0;
@@ -515,7 +516,7 @@ NL_BUILTIN(is_pair) {
 NL_BUILTIN(is_symbol) {
   if (nl_evalq(scope, cell.type == NL_PAIR ? NL_HEAD(cell) : cell, result)) return 1;
   if (result->type == NL_SYMBOL)
-    *result = nl_cell_as_symbol(nl_intern(strdup("t")));
+    *result = t;
   else
     *result = nl_cell_as_nil();
   return 0;
@@ -576,10 +577,9 @@ NL_BUILTIN(foreach) {
     scope->last_err = "illegal foreach: expected a pair";
     return 1;
   }
-  quote = nl_cell_as_symbol(nl_intern(strdup("quote")));
   NL_FOREACH(&list, a) {
-    call = nl_cell_as_pair(fun, nl_cell_as_pair(nl_cell_as_pair(quote, *a), nl_cell_as_nil()));
-    if (nl_call(scope, call, result)) return 1;
+    call = nl_cell_as_pair(fun, nl_cell_as_pair(nl_cell_as_pair(quote, NL_HEAD_AT(a)), nl_cell_as_nil()));
+    if (nl_evalq(scope, call, result)) return 1;
   }
   return 0;
 }
@@ -606,7 +606,7 @@ NL_BUILTIN(map) {
   *result = nl_cell_as_pair(nl_cell_as_nil(), nl_cell_as_nil());
   NL_FOREACH(&list, item) {
     call = nl_cell_as_pair(fun, nl_cell_as_pair(nl_cell_as_pair(quote, NL_HEAD_AT(item)), nl_cell_as_nil()));
-    if (nl_call(scope, call, result->value.as_pair)) return 1;
+    if (nl_evalq(scope, call, result->value.as_pair)) return 1;
     switch (NL_TAIL_AT(item).type) {
     case NL_NIL:
       break;
@@ -616,7 +616,7 @@ NL_BUILTIN(map) {
       break;
     default:
       call = nl_cell_as_pair(fun, nl_cell_as_pair(nl_cell_as_pair(quote, NL_TAIL_AT(item)), nl_cell_as_nil()));
-      return nl_call(scope, call, NL_NEXT_AT(result));
+      return nl_evalq(scope, call, NL_NEXT_AT(result));
     }
   }
   return 0;
@@ -644,7 +644,7 @@ NL_BUILTIN(filter) {
   *result = nl_cell_as_pair(nl_cell_as_nil(), nl_cell_as_nil());
   NL_FOREACH(&list, item) {
     call = nl_cell_as_pair(fun, nl_cell_as_pair(nl_cell_as_pair(quote, NL_HEAD_AT(item)), nl_cell_as_nil()));
-    if (nl_call(scope, call, result->value.as_pair)) return 1;
+    if (nl_evalq(scope, call, result->value.as_pair)) return 1;
     if (NL_HEAD_AT(result).type != NL_NIL) {
       NL_HEAD_AT(result) = NL_HEAD_AT(item);
       NL_TAIL_AT(result) = nl_cell_as_pair(nl_cell_as_nil(), nl_cell_as_nil());
@@ -680,14 +680,14 @@ NL_BUILTIN(reduce) {
   }
   NL_FOREACH(&list, item) {
     call = nl_cell_as_pair(fun, nl_cell_as_pair(nl_cell_as_pair(quote, NL_HEAD_AT(item)), nl_cell_as_pair(nl_cell_as_pair(quote, *result), nl_cell_as_nil())));
-    if (nl_call(scope, call, result)) return 1;
+    if (nl_evalq(scope, call, result)) return 1;
   }
   return 0;
 }
 NL_BUILTIN(equal) {
   struct nl_cell *tail, last, val;
   if (cell.type != NL_PAIR) {
-    *result = nl_cell_as_symbol(nl_intern(strdup("t")));
+    *result = t;
     return 0;
   }
   if (nl_evalq(scope, NL_HEAD(cell), &last)) return 1;
@@ -698,7 +698,7 @@ NL_BUILTIN(equal) {
       return 0;
     }
   }
-  *result = nl_cell_as_symbol(nl_intern(strdup("t")));
+  *result = t;
   return 0;
 }
 int64_t nl_list_length(struct nl_cell l) {
@@ -799,7 +799,7 @@ NL_BUILTIN(lt) {
     }
     a = b;
   }
-  *result = nl_cell_as_symbol(nl_intern(strdup("t")));
+  *result = t;
   return 0;
 }
 NL_BUILTIN(gt) {
@@ -817,7 +817,7 @@ NL_BUILTIN(gt) {
     }
     a = b;
   }
-  *result = nl_cell_as_symbol(nl_intern(strdup("t")));
+  *result = t;
   return 0;
 }
 NL_BUILTIN(lte) {
@@ -835,7 +835,7 @@ NL_BUILTIN(lte) {
     }
     a = b;
   }
-  *result = nl_cell_as_symbol(nl_intern(strdup("t")));
+  *result = t;
   return 0;
 }
 NL_BUILTIN(gte) {
@@ -853,13 +853,13 @@ NL_BUILTIN(gte) {
     }
     a = b;
   }
-  *result = nl_cell_as_symbol(nl_intern(strdup("t")));
+  *result = t;
   return 0;
 }
 NL_BUILTIN(not) {
   if (nl_evalq(scope, cell.type == NL_PAIR ? NL_HEAD(cell) : cell, result)) return 1;
   if (result->type == NL_NIL)
-    *result = nl_cell_as_symbol(nl_intern(strdup("t")));
+    *result = t;
   else
     *result = nl_cell_as_nil();
   return 0;
@@ -1204,27 +1204,6 @@ NL_BUILTIN(write_bytes) {
   scope->last_err = "unknown cell type";
   return 1;
 }
-NL_BUILTIN(write_wbytes) {
-  struct nl_cell *a;
-  switch (cell.type) {
-  case NL_INTEGER:
-    fputwc((wchar_t)cell.value.as_integer, scope->stdout);
-  case NL_NIL:
-    *result = cell;
-    return 0;
-  case NL_SYMBOL:
-    return nl_evalq(scope, cell, result)
-      || nl_write_wbytes(scope, *result, result);
-  case NL_PAIR:
-    NL_FOREACH(&cell, a) {
-      if (nl_evalq(scope, NL_HEAD_AT(a), result)) return 1;
-      if (nl_write_wbytes(scope, *result, result)) return 1;
-    }
-    return nl_write_wbytes(scope, *a, result);
-  }
-  scope->last_err = "unknown cell type";
-  return 1;
-}
 void nl_scope_define_builtins(struct nl_scope *scope) {
   NL_DEF_BUILTIN("*", mul);
   NL_DEF_BUILTIN("+", add);
@@ -1262,7 +1241,6 @@ void nl_scope_define_builtins(struct nl_scope *scope) {
   NL_DEF_BUILTIN("tail", tail);
   NL_DEF_BUILTIN("write", write);
   NL_DEF_BUILTIN("write-bytes", write_bytes);
-  NL_DEF_BUILTIN("write-wbytes", write_wbytes);
   NL_DEF_BUILTIN("writeq", writeq);
 }
 // Main REPL
@@ -1290,7 +1268,10 @@ int nl_run_repl(struct nl_scope *scope) {
   }
 }
 void nl_globals_init() {
+  nil = nl_cell_as_nil();
+  t = nl_cell_as_symbol(nl_intern(strdup("t")));
   quote = nl_cell_as_symbol(nl_intern(strdup("quote")));
+  unquote = nl_cell_as_symbol(nl_intern(strdup("unquote")));
 }
 int main() {
   struct nl_scope scope;
