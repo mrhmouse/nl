@@ -33,6 +33,9 @@
 #define NL_HEAD_AT(ref) ref->value.as_pair[0]
 #define NL_TAIL_AT(ref) ref->value.as_pair[1]
 #define NL_NEXT_AT(ref) (ref->value.as_pair+1)
+#define NL_BUILTIN(name) int nl_ ## name(struct nl_scope *scope, struct nl_cell cell, struct nl_cell *result)
+#define NL_FOREACH(start, a) for (a = start; a->type == NL_PAIR; a = NL_NEXT_AT(a))
+#define NL_DEF_BUILTIN(sym, name) nl_scope_put(scope, nl_intern(strdup(sym)), nl_cell_as_int((int64_t)nl_ ## name))
 //
 // Structures and typedefs
 // =======================
@@ -133,11 +136,17 @@ struct nl_cell nl_cell_as_symbol(char *interned_symbol) {
   c.value.as_symbol = interned_symbol;
   return c;
 }
-// Globals
-// =======
 // these values are used internally
 static struct nl_cell nil, t, quote, unquote;
-
+int64_t nl_list_length(struct nl_cell l) {
+  int64_t len = 0;
+  struct nl_cell *p;
+  NL_FOREACH(&l, p) {
+    ++len;
+  }
+  if (p->type != NL_NIL) ++len;
+  return len;
+}
 // initialize a scope, defining the first value: "nil"
 void nl_scope_init(struct nl_scope *scope) {
   scope->stdout = stdout;
@@ -350,9 +359,6 @@ void nl_scope_link(struct nl_scope *child, struct nl_scope *parent) {
 // Language Builtins
 // =================
 // all builtins have the same signature as native functions
-#define NL_BUILTIN(name) int nl_ ## name(struct nl_scope *scope, struct nl_cell cell, struct nl_cell *result)
-#define NL_FOREACH(start, a) for (a = start; a->type == NL_PAIR; a = NL_NEXT_AT(a))
-#define NL_DEF_BUILTIN(sym, name) nl_scope_put(scope, nl_intern(strdup(sym)), nl_cell_as_int((int64_t)nl_ ## name))
 NL_BUILTIN(evalq);
 int nl_setqe(struct nl_scope *target_scope, struct nl_scope *eval_scope, struct nl_cell args, struct nl_cell *result) {
   struct nl_cell *tail;
@@ -654,18 +660,18 @@ NL_BUILTIN(filter) {
   *result = nl_cell_as_nil();
   return 0;
 }
-NL_BUILTIN(reduce) {
+NL_BUILTIN(fold) {
   struct nl_cell fun, list, *item, call;
   if (cell.type != NL_PAIR) {
-    scope->last_err = "illegal reduce: non-pair args";
+    scope->last_err = "illegal fold: non-pair args";
     return 1;
   }
   if (NL_TAIL(cell).type != NL_PAIR) {
-    scope->last_err = "illegal reduce: expected at least three args in list";
+    scope->last_err = "illegal fold: expected at least three args in list";
     return 1;
   }
   if (NL_TAIL(NL_TAIL(cell)).type != NL_PAIR) {
-    scope->last_err = "illegal reduce: expected at least three args in list";
+    scope->last_err = "illegal fold: expected at least three args in list";
     return 1;
   }
   if (nl_evalq(scope, NL_HEAD(cell), &fun)) return 1;
@@ -675,12 +681,45 @@ NL_BUILTIN(reduce) {
     return 0;
   }
   if (list.type != NL_PAIR) {
-    scope->last_err = "illegal reduce: third argument should be a pair";
+    scope->last_err = "illegal fold: third argument should be a pair";
     return 1;
   }
   NL_FOREACH(&list, item) {
     call = nl_cell_as_pair(fun, nl_cell_as_pair(nl_cell_as_pair(quote, NL_HEAD_AT(item)), nl_cell_as_pair(nl_cell_as_pair(quote, *result), nl_cell_as_nil())));
     if (nl_evalq(scope, call, result)) return 1;
+  }
+  return 0;
+}
+//
+// > (unfold 10 () pair
+//           '((N) (> N 0))
+//           '((N) (- N 1)))
+// ; (1 2 3 4 5 6 7 8 9 10)
+//
+NL_BUILTIN(unfold) {
+  struct nl_cell seed, pair_f, continue_f, next_seed_f, call, v;
+  if (cell.type != NL_PAIR) {
+    scope->last_err = "illegal unfold: non-pair args";
+    return 1;
+  }
+  if (nl_list_length(cell) != 5) {
+    scope->last_err = "illegal unfold: expected exactly five args";
+    return 1;
+  }
+  if (nl_evalq(scope, NL_HEAD(cell), &seed)
+      || nl_evalq(scope, NL_HEAD(NL_TAIL(cell)), result)
+      || nl_evalq(scope, NL_HEAD(NL_TAIL(NL_TAIL(cell))), &pair_f)
+      || nl_evalq(scope, NL_HEAD(NL_TAIL(NL_TAIL(NL_TAIL(cell)))), &continue_f)
+      || nl_evalq(scope, NL_HEAD(NL_TAIL(NL_TAIL(NL_TAIL(NL_TAIL(cell))))), &next_seed_f))
+    return 1;
+  for (;;) {
+    call = nl_cell_as_pair(continue_f, nl_cell_as_pair(nl_cell_as_pair(quote, seed), nil));
+    if (nl_evalq(scope, call, &v)) return 1;
+    if (v.type == NL_NIL) break;
+    call = nl_cell_as_pair(pair_f, nl_cell_as_pair(nl_cell_as_pair(quote, seed), nl_cell_as_pair(nl_cell_as_pair(quote, *result), nil)));
+    if (nl_evalq(scope, call, result)) return 1;
+    call = nl_cell_as_pair(next_seed_f, nl_cell_as_pair(nl_cell_as_pair(quote, seed), nil));
+    if (nl_evalq(scope, call, &seed)) return 1;
   }
   return 0;
 }
@@ -700,15 +739,6 @@ NL_BUILTIN(equal) {
   }
   *result = t;
   return 0;
-}
-int64_t nl_list_length(struct nl_cell l) {
-  int64_t len = 0;
-  struct nl_cell *p;
-  NL_FOREACH(&l, p) {
-    ++len;
-  }
-  if (p->type != NL_NIL) ++len;
-  return len;
 }
 int nl_compare(struct nl_cell a, struct nl_cell b) {
   struct nl_cell *i, *j;
@@ -1234,11 +1264,12 @@ void nl_scope_define_builtins(struct nl_scope *scope) {
   NL_DEF_BUILTIN("print", print);
   NL_DEF_BUILTIN("printq", printq);
   NL_DEF_BUILTIN("quote", quote);
-  NL_DEF_BUILTIN("reduce", reduce);
+  NL_DEF_BUILTIN("fold", fold);
   NL_DEF_BUILTIN("set", set);
   NL_DEF_BUILTIN("setq", setq);
   NL_DEF_BUILTIN("symbol?", is_symbol);
   NL_DEF_BUILTIN("tail", tail);
+  NL_DEF_BUILTIN("unfold", unfold);
   NL_DEF_BUILTIN("write", write);
   NL_DEF_BUILTIN("write-bytes", write_bytes);
   NL_DEF_BUILTIN("writeq", writeq);
