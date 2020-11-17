@@ -80,13 +80,7 @@ struct nl_scope_symbols {
 // then the parent scope is consulted recursively until a match is found,
 // or there are no more parent scopes. if no match is found, the value `nil`
 // is returned by default
-//
-// currently, scopes also contain the traditional I/O streams plus
-// a single slot for the last error in scope.. something TODO later
-// will be to possibly move these to values inside the scope, so
-// lookups work naturally and they can be shadowed
 struct nl_scope {
-  FILE *stdout, *stdin, *stderr;
   char *last_err;
   struct nl_scope_symbols *symbols;
   struct nl_scope *parent_scope;
@@ -139,7 +133,7 @@ struct nl_cell nl_cell_as_symbol(char *interned_symbol) {
   return c;
 }
 // these values are used internally
-static struct nl_cell nil, t, quote, unquote;
+static struct nl_cell nil, t, quote, unquote, nl_in, nl_out, nl_err;
 int64_t nl_list_length(struct nl_cell l) {
   int64_t len = 0;
   struct nl_cell *p;
@@ -149,11 +143,8 @@ int64_t nl_list_length(struct nl_cell l) {
   if (p->type != NL_NIL) ++len;
   return len;
 }
-// initialize a scope, defining the first value: "nil"
+// initialize a scope, defining the first values
 void nl_scope_init(struct nl_scope *scope) {
-  scope->stdout = stdout;
-  scope->stdin = stdin;
-  scope->stderr = stderr;
   scope->last_err = NULL;
   scope->parent_scope = NULL;
   scope->symbols = GC_malloc(sizeof(*scope->symbols));
@@ -163,11 +154,11 @@ void nl_scope_init(struct nl_scope *scope) {
 }
 // Reading Data from Input
 // =======================
-// read the next non-whitespace character from the stdin in scope
-int nl_skip_whitespace(struct nl_scope *scope) {
+// read the next non-whitespace character from the given input
+int nl_skip_whitespace(FILE *in) {
   int ch;
   do {
-    ch = fgetc(scope->stdin);
+    ch = fgetc(in);
   } while (isspace(ch));
   return ch;
 }
@@ -202,30 +193,30 @@ char *nl_intern(char *sym) {
   return NULL;
 }
 // read the next value from the stdin in scope.
-int nl_read(struct nl_scope *scope, struct nl_cell *result) {
+int nl_read(struct nl_scope *scope, FILE *s_in, struct nl_cell *result) {
   struct nl_cell head, *tail;
-  int sign = 1, ch = nl_skip_whitespace(scope);
+  int sign = 1, ch = nl_skip_whitespace(s_in);
   if (ch == '-') {
     // the hyphen can be used to indicate negative numbers, but
     // it could also be the start of a symbol
-    int peek = fgetc(scope->stdin);
+    int peek = fgetc(s_in);
     if (isdigit(peek)) {
       sign = -1;
       ch = peek;
       goto NL_READ_DIGIT;
     }
-    ungetc(peek, scope->stdin);
+    ungetc(peek, s_in);
     goto NL_READ_SYMBOL;
   } else if (isdigit(ch)) {
     // otherwise, only numbers start with digits
   NL_READ_DIGIT:
     *result = nl_cell_as_int(ch - '0');
-    while (isdigit(ch = fgetc(scope->stdin))) {
+    while (isdigit(ch = fgetc(s_in))) {
       result->value.as_integer *= 10;
       result->value.as_integer += ch - '0';
     }
     result->value.as_integer *= sign;
-    ungetc(ch, scope->stdin);
+    ungetc(ch, s_in);
     return 0;
   } else if ('"' == ch) {
     // TODO :^)
@@ -235,7 +226,7 @@ int nl_read(struct nl_scope *scope, struct nl_cell *result) {
     // if the value is prefixed with the single-quote character,
     // then it is returned as the tail of a pair, with the symbol
     // `quote` as the head
-    if (nl_read(scope, &head)) return 1;
+    if (nl_read(scope, s_in, &head)) return 1;
     *result = nl_cell_as_pair(quote, head);
     return 0;
   } else if (',' == ch) {
@@ -243,39 +234,39 @@ int nl_read(struct nl_scope *scope, struct nl_cell *result) {
     // then it is returned as the tail of a pair, with the symbol
     // `unquote` as the head. TODO this doesn't currently do anything
     // at evaluation time, though. it might later interact with `quote`
-    if (nl_read(scope, &head)) return 1;
+    if (nl_read(scope, s_in, &head)) return 1;
     *result = nl_cell_as_pair(unquote, head);
     return 0;
   } else if ('(' == ch) {
     // lists are written enclosed in parentheses, and can have two or
     // more items separated by whitespace. they are encoded as chains
     // of pairs, where the last tail is any non-pair cell -- usually `nil`
-    ch = nl_skip_whitespace(scope);
+    ch = nl_skip_whitespace(s_in);
     if (ch == ')') {
       *result = nil;
       return 0;
     }
-    ungetc(ch, scope->stdin);
-    if (nl_read(scope, &head)) return 1;
+    ungetc(ch, s_in);
+    if (nl_read(scope, s_in, &head)) return 1;
     *result = nl_cell_as_pair(head, nil);
     tail = NL_NEXT_AT(result);
     for (;;) {
-      ch = nl_skip_whitespace(scope);
+      ch = nl_skip_whitespace(s_in);
       if (ch == ')') return 0;
       if (ch == '.') {
         // if the last item in a list is separated from the other
         // items using a period, then it will be the last tail of
         // the chain of pairs composing the list
-        if (nl_read(scope, tail)) return 1;
-        if (nl_skip_whitespace(scope) != ')') {
+        if (nl_read(scope, s_in, tail)) return 1;
+        if (nl_skip_whitespace(s_in) != ')') {
           scope->last_err = "illegal list";
           return 1;
         }
         return 0;
       }
       // otherwise, the last tail of the chain is set to `nil`
-      ungetc(ch, scope->stdin);
-      if (nl_read(scope, &head)) return 1;
+      ungetc(ch, s_in);
+      if (nl_read(scope, s_in, &head)) return 1;
       *tail = nl_cell_as_pair(head, nil);
       tail = NL_NEXT_AT(tail);
     }
@@ -292,14 +283,14 @@ int nl_read(struct nl_scope *scope, struct nl_cell *result) {
     // cannot normally _start_ with characters like the period or comma, it
     // *can* contain them. if you intend to use these characters as operators,
     // ensure they're separated from other symbols on the left by whitespace
-    for (; !isspace(ch) && ch != '(' && ch != ')'; ch = fgetc(scope->stdin)) {
+    for (; !isspace(ch) && ch != '(' && ch != ')'; ch = fgetc(s_in)) {
       buf[used++] = ch;
       if (used == allocated) {
         allocated *= 2;
         buf = realloc(buf, sizeof(char) * allocated);
       }
     }
-    ungetc(ch, scope->stdin);
+    ungetc(ch, s_in);
     buf[used] = '\0';
     buf = realloc(buf, sizeof(char) * used);
     // all symbols get interned as soon as they're read; only unique values
@@ -353,9 +344,6 @@ void nl_scope_get(struct nl_scope *scope, char *name, struct nl_cell *result) {
 // linking a scope to a parent scope also copies references to the scope's I/O streams.
 // this will allow child scopes to temporarily redirect their input or output to files
 void nl_scope_link(struct nl_scope *child, struct nl_scope *parent) {
-  child->stdout = parent->stdout;
-  child->stdin = parent->stdin;
-  child->stderr = parent->stderr;
   child->parent_scope = parent;
 }
 // Language Builtins
@@ -1087,22 +1075,27 @@ NL_BUILTIN(div) {
   return 0;
 }
 NL_BUILTIN(printq) {
+  struct nl_cell s_out;
+  FILE *out = stdout;
+  if (!nl_evalq(scope, nl_out, &s_out)
+      && s_out.type == NL_INTEGER)
+    out = (FILE *)s_out.value.as_integer;
   switch (cell.type) {
   case NL_NIL:
-    fprintf(scope->stdout, "nil");
+    fprintf(out, "nil");
     *result = cell;
     return 0;
   case NL_INTEGER:
-    fprintf(scope->stdout, "%li", cell.value.as_integer);
+    fprintf(out, "%li", cell.value.as_integer);
     *result = cell;
     return 0;
   case NL_PAIR:
     if (nl_printq(scope, NL_HEAD(cell), result)) return 1;
     if (NL_TAIL(cell).type == NL_NIL) return 0;
-    fprintf(scope->stdout, NL_TAIL(cell).type == NL_PAIR ? " " : ", ");
+    fprintf(out, NL_TAIL(cell).type == NL_PAIR ? " " : ", ");
     return nl_printq(scope, NL_TAIL(cell), result);
   case NL_SYMBOL:
-    fprintf(scope->stdout, "%s", cell.value.as_symbol);
+    fprintf(out, "%s", cell.value.as_symbol);
     *result = cell;
     return 0;
   default:
@@ -1111,16 +1104,20 @@ NL_BUILTIN(printq) {
   }
 }
 NL_BUILTIN(print) {
-  struct nl_cell val, *tail;
+  struct nl_cell val, *tail, s_out;
+  FILE *out = stdout;
+  if (!nl_evalq(scope, nl_out, &s_out)
+      && s_out.type == NL_INTEGER)
+    out = (FILE *)s_out.value.as_integer;
   if (cell.type != NL_PAIR)
     return nl_evalq(scope, cell, result) || nl_printq(scope, cell, result);
   NL_FOREACH(&cell, tail) {
     if (nl_evalq(scope, NL_HEAD_AT(tail), &val)) return 1;
     if (nl_printq(scope, val, result)) return 1;
-    if (NL_TAIL_AT(tail).type == NL_PAIR) fputc(' ', scope->stdout);
+    if (NL_TAIL_AT(tail).type == NL_PAIR) fputc(' ', out);
   }
   if (tail->type != NL_NIL) {
-    fprintf(scope->stdout, ", ");
+    fprintf(out, ", ");
     nl_print(scope, *tail, result);
   }
   return 0;
@@ -1171,41 +1168,45 @@ NL_BUILTIN(set) {
   return 0;
 }
 NL_BUILTIN(writeq) {
-  struct nl_cell *tail;
+  struct nl_cell *tail, s_out;
+  FILE *out = stdout;
+  if (!nl_evalq(scope, nl_out, &s_out)
+      && s_out.type == NL_INTEGER)
+    out = (FILE *)s_out.value.as_integer;
   switch (cell.type) {
   case NL_NIL:
-    fprintf(scope->stdout, "nil");
+    fprintf(out, "nil");
     *result = cell;
     return 0;
   case NL_INTEGER:
-    fprintf(scope->stdout, "%li", cell.value.as_integer);
+    fprintf(out, "%li", cell.value.as_integer);
     *result = cell;
     return 0;
   case NL_SYMBOL:
-    fprintf(scope->stdout, "%s", cell.value.as_symbol);
+    fprintf(out, "%s", cell.value.as_symbol);
     *result = cell;
     return 0;
   case NL_PAIR:
-    fputc('(', scope->stdout);
+    fputc('(', out);
     if (nl_writeq(scope, NL_HEAD(cell), result)) return 1;
     tail = NL_NEXT(cell);
     for (;;) {
       switch (tail->type) {
       case NL_NIL:
-        fputc(')', scope->stdout);
+        fputc(')', out);
         *result = cell;
         return 0;
       case NL_PAIR:
-        fputc(' ', scope->stdout);
+        fputc(' ', out);
         if (nl_writeq(scope, NL_HEAD_AT(tail), result)) return 1;
         tail = NL_NEXT_AT(tail);
         break;
       case NL_INTEGER:
-        fprintf(scope->stdout, " . %li)", tail->value.as_integer);
+        fprintf(out, " . %li)", tail->value.as_integer);
         return 0;
       case NL_SYMBOL:
         // TODO write quoted symbols
-        fprintf(scope->stdout, " . %s)", tail->value.as_symbol);
+        fprintf(out, " . %s)", tail->value.as_symbol);
         return 0;
       }
     }
@@ -1247,10 +1248,14 @@ NL_BUILTIN(or) {
   return 0;
 }
 NL_BUILTIN(write_bytes) {
-  struct nl_cell *a;
+  struct nl_cell *a, s_out;
+  FILE *out = stdout;
+  if (!nl_evalq(scope, nl_out, &s_out)
+      && s_out.type == NL_INTEGER)
+    out = (FILE *)s_out.value.as_integer;
   switch (cell.type) {
   case NL_INTEGER:
-    fputc((char)cell.value.as_integer, scope->stdout);
+    fputc((char)cell.value.as_integer, out);
   case NL_NIL:
     *result = cell;
     return 0;
@@ -1285,6 +1290,9 @@ NL_BUILTIN(exit) {
   return 1;
 }
 void nl_scope_define_builtins(struct nl_scope *scope) {
+  nl_scope_put(scope, nl_in.value.as_symbol, nl_cell_as_int((int64_t)stdin));
+  nl_scope_put(scope, nl_out.value.as_symbol, nl_cell_as_int((int64_t)stdout));
+  nl_scope_put(scope, nl_err.value.as_symbol, nl_cell_as_int((int64_t)stderr));
   NL_DEF_BUILTIN("*", mul);
   NL_DEF_BUILTIN("+", add);
   NL_DEF_BUILTIN("-", sub);
@@ -1329,26 +1337,36 @@ void nl_scope_define_builtins(struct nl_scope *scope) {
 // Main REPL
 // =========
 int nl_run_repl(int interactive, struct nl_scope *scope) {
-  struct nl_cell last_read, last_eval;
+  struct nl_cell last_read, last_eval, c_in, c_out, c_err;
+  FILE *s_in = stdin, *s_out = stdout, *s_err = stderr;
   for (;;) {
+    if (!nl_evalq(scope, nl_in, &c_in)
+        && c_in.type == NL_INTEGER)
+      s_in = (FILE *)c_in.value.as_integer;
+    if (!nl_evalq(scope, nl_out, &c_out)
+        && c_out.type == NL_INTEGER)
+      s_out = (FILE *)c_out.value.as_integer;
+    if (!nl_evalq(scope, nl_err, &c_err)
+        && c_err.type == NL_INTEGER)
+      s_err = (FILE *)c_err.value.as_integer;
     if (interactive)
-      fprintf(scope->stdout, "\n> ");
-    if (nl_read(scope, &last_read)) {
+      fprintf(s_out, "\n> ");
+    if (nl_read(scope, s_in, &last_read)) {
       if (scope->last_err)
-        fprintf(scope->stderr, "ERROR read: %s\n", scope->last_err);
+        fprintf(s_err, "ERROR read: %s\n", scope->last_err);
       else
-        fputs("ERROR read\n", scope->stderr);
+        fputs("ERROR read\n", s_err);
       return 1;
     }
     if (nl_evalq(scope, last_read, &last_eval)) {
       if (scope->last_err)
-        fprintf(scope->stderr, "ERROR eval: %s\n", scope->last_err);
+        fprintf(s_err, "ERROR eval: %s\n", scope->last_err);
       else
-        fputs("ERROR eval\n", scope->stderr);
+        fputs("ERROR eval\n", s_err);
       return 2;
     }
     if (interactive) {
-      fputs("; ", scope->stdout);
+      fputs("; ", s_out);
       nl_writeq(scope, last_eval, &last_read);
     }
   }
@@ -1358,6 +1376,9 @@ void nl_globals_init() {
   t = nl_cell_as_symbol(nl_intern(strdup("t")));
   quote = nl_cell_as_symbol(nl_intern(strdup("quote")));
   unquote = nl_cell_as_symbol(nl_intern(strdup("unquote")));
+  nl_in  = nl_cell_as_symbol(nl_intern(strdup("*In")));
+  nl_out = nl_cell_as_symbol(nl_intern(strdup("*Out")));
+  nl_err = nl_cell_as_symbol(nl_intern(strdup("*Err")));
 }
 int main() {
   struct nl_scope scope;
