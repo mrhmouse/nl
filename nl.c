@@ -196,7 +196,9 @@ char *nl_intern(char *sym) {
 int nl_read(struct nl_scope *scope, FILE *s_in, struct nl_cell *result) {
   struct nl_cell head, *tail;
   int sign = 1, ch = nl_skip_whitespace(s_in);
-  if (ch == '-') {
+  if (ch == EOF) {
+    return EOF;
+  } else if (ch == '-') {
     // the hyphen can be used to indicate negative numbers, but
     // it could also be the start of a symbol
     int peek = fgetc(s_in);
@@ -1289,6 +1291,26 @@ NL_BUILTIN(exit) {
   }
   return 1;
 }
+NL_BUILTIN(load) {
+  struct nl_cell last_read, c_in;
+  FILE *in;
+  if (cell.type != NL_PAIR) {
+    scope->last_err = "illegal load";
+    return 1;
+  }
+  if (nl_evalq(scope, NL_HEAD(cell), &c_in)) return 1;
+  if (c_in.type != NL_SYMBOL) {
+    scope->last_err = "illegal load: expected pathname";
+    return 1;
+  }
+  in = fopen(c_in.value.as_symbol, "r");
+  if (!in) in = stdin;
+  for (;;) {
+    if (nl_read(scope, in, &last_read) == EOF) break;
+    if (nl_evalq(scope, last_read, result)) return 1;
+  }
+  return 0;
+}
 void nl_scope_define_builtins(struct nl_scope *scope) {
   nl_scope_put(scope, nl_in.value.as_symbol, nl_cell_as_int((int64_t)stdin));
   nl_scope_put(scope, nl_out.value.as_symbol, nl_cell_as_int((int64_t)stdout));
@@ -1315,6 +1337,7 @@ void nl_scope_define_builtins(struct nl_scope *scope) {
   NL_DEF_BUILTIN("length", length);
   NL_DEF_BUILTIN("letq", letq);
   NL_DEF_BUILTIN("list", list);
+  NL_DEF_BUILTIN("load", load);
   NL_DEF_BUILTIN("map", map);
   NL_DEF_BUILTIN("map-pair", mappair);
   NL_DEF_BUILTIN("nil?", is_nil);
