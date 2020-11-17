@@ -20,6 +20,7 @@
 //   both a single-item and a splicing version, e.g.
 //   `'(1 2 ,(+ 1 2))` should produce the list `(1 2 3)`
 //   while `'(1 2 ,.(range 3 5))` should produce `(1 2 3 4 5)`
+// * need tail-call optimization
 #include <ctype.h>
 #include <stdint.h>
 #include <stdlib.h>
@@ -250,12 +251,12 @@ int nl_read(struct nl_scope *scope, struct nl_cell *result) {
     // of pairs, where the last tail is any non-pair cell -- usually `nil`
     ch = nl_skip_whitespace(scope);
     if (ch == ')') {
-      *result = nl_cell_as_nil();
+      *result = nil;
       return 0;
     }
     ungetc(ch, scope->stdin);
     if (nl_read(scope, &head)) return 1;
-    *result = nl_cell_as_pair(head, nl_cell_as_nil());
+    *result = nl_cell_as_pair(head, nil);
     tail = NL_NEXT_AT(result);
     for (;;) {
       ch = nl_skip_whitespace(scope);
@@ -274,7 +275,7 @@ int nl_read(struct nl_scope *scope, struct nl_cell *result) {
       // otherwise, the last tail of the chain is set to `nil`
       ungetc(ch, scope->stdin);
       if (nl_read(scope, &head)) return 1;
-      *tail = nl_cell_as_pair(head, nl_cell_as_nil());
+      *tail = nl_cell_as_pair(head, nil);
       tail = NL_NEXT_AT(tail);
     }
   } else {
@@ -346,7 +347,7 @@ void nl_scope_get(struct nl_scope *scope, char *name, struct nl_cell *result) {
         return;
       }
   }
-  *result = nl_cell_as_nil();
+  *result = nil;
 }
 // linking a scope to a parent scope also copies references to the scope's I/O streams.
 // this will allow child scopes to temporarily redirect their input or output to files
@@ -500,7 +501,7 @@ NL_BUILTIN(is_nil) {
   if (result->type == NL_NIL)
     *result = t;
   else
-    *result = nl_cell_as_nil();
+    *result = nil;
   return 0;
 }
 NL_BUILTIN(is_integer) {
@@ -508,7 +509,7 @@ NL_BUILTIN(is_integer) {
   if (result->type == NL_INTEGER)
     *result = t;
   else
-    *result = nl_cell_as_nil();
+    *result = nil;
   return 0;
 }
 NL_BUILTIN(is_pair) {
@@ -516,7 +517,7 @@ NL_BUILTIN(is_pair) {
   if (result->type == NL_PAIR)
     *result = t;
   else
-    *result = nl_cell_as_nil();
+    *result = nil;
   return 0;
 }
 NL_BUILTIN(is_symbol) {
@@ -524,7 +525,7 @@ NL_BUILTIN(is_symbol) {
   if (result->type == NL_SYMBOL)
     *result = t;
   else
-    *result = nl_cell_as_nil();
+    *result = nil;
   return 0;
 }
 int nl_cell_equal(struct nl_cell a, struct nl_cell b) {
@@ -576,7 +577,7 @@ NL_BUILTIN(foreach) {
   if (nl_evalq(scope, NL_HEAD(cell), &fun)) return 1;
   if (nl_evalq(scope, NL_HEAD(NL_TAIL(cell)), &list)) return 1;
   if (list.type == NL_NIL) {
-    *result = nl_cell_as_nil();
+    *result = nil;
     return 0;
   }
   if (list.type != NL_PAIR) {
@@ -584,7 +585,7 @@ NL_BUILTIN(foreach) {
     return 1;
   }
   NL_FOREACH(&list, a) {
-    call = nl_cell_as_pair(fun, nl_cell_as_pair(nl_cell_as_pair(quote, NL_HEAD_AT(a)), nl_cell_as_nil()));
+    call = nl_cell_as_pair(fun, nl_cell_as_pair(nl_cell_as_pair(quote, NL_HEAD_AT(a)), nil));
     if (nl_evalq(scope, call, result)) return 1;
   }
   return 0;
@@ -609,20 +610,51 @@ NL_BUILTIN(map) {
     scope->last_err = "illegal map: second argument should be a pair";
     return 1;
   }
-  *result = nl_cell_as_pair(nl_cell_as_nil(), nl_cell_as_nil());
+  *result = nl_cell_as_pair(nil, nil);
   NL_FOREACH(&list, item) {
-    call = nl_cell_as_pair(fun, nl_cell_as_pair(nl_cell_as_pair(quote, NL_HEAD_AT(item)), nl_cell_as_nil()));
+    call = nl_cell_as_pair(fun, nl_cell_as_pair(nl_cell_as_pair(quote, NL_HEAD_AT(item)), nil));
     if (nl_evalq(scope, call, result->value.as_pair)) return 1;
     switch (NL_TAIL_AT(item).type) {
     case NL_NIL:
       break;
     case NL_PAIR:
-      NL_TAIL_AT(result) = nl_cell_as_pair(nl_cell_as_nil(), nl_cell_as_nil());
+      NL_TAIL_AT(result) = nl_cell_as_pair(nil, nil);
       result = NL_NEXT_AT(result);
       break;
     default:
-      call = nl_cell_as_pair(fun, nl_cell_as_pair(nl_cell_as_pair(quote, NL_TAIL_AT(item)), nl_cell_as_nil()));
+      call = nl_cell_as_pair(fun, nl_cell_as_pair(nl_cell_as_pair(quote, NL_TAIL_AT(item)), nil));
       return nl_evalq(scope, call, NL_NEXT_AT(result));
+    }
+  }
+  return 0;
+}
+NL_BUILTIN(mappair) {
+  struct nl_cell fun, list, *item, call;
+  if (cell.type != NL_PAIR) {
+    scope->last_err = "illegal map: non-pair args";
+    return 1;
+  }
+  if (NL_TAIL(cell).type != NL_PAIR) {
+    scope->last_err = "illegal map: expected at least two args in list";
+    return 1;
+  }
+  if (nl_evalq(scope, NL_HEAD(cell), &fun)) return 1;
+  if (nl_evalq(scope, NL_HEAD(NL_TAIL(cell)), &list)) return 1;
+  if (list.type == NL_NIL) {
+    *result = list;
+    return 0;
+  }
+  if (list.type != NL_PAIR) {
+    scope->last_err = "illegal map: second argument should be a pair";
+    return 1;
+  }
+  *result = nl_cell_as_pair(nil, nil);
+  NL_FOREACH(&list, item) {
+    call = nl_cell_as_pair(fun, nl_cell_as_pair(nl_cell_as_pair(quote, *item), nil));
+    if (nl_evalq(scope, call, result->value.as_pair)) return 1;
+    if (NL_TAIL_AT(item).type == NL_PAIR) {
+      NL_TAIL_AT(result) = nl_cell_as_pair(nil, nil);
+      result = NL_NEXT_AT(result);
     }
   }
   return 0;
@@ -647,17 +679,17 @@ NL_BUILTIN(filter) {
     scope->last_err = "illegal filter: second argument should be a pair";
     return 1;
   }
-  *result = nl_cell_as_pair(nl_cell_as_nil(), nl_cell_as_nil());
+  *result = nl_cell_as_pair(nil, nil);
   NL_FOREACH(&list, item) {
-    call = nl_cell_as_pair(fun, nl_cell_as_pair(nl_cell_as_pair(quote, NL_HEAD_AT(item)), nl_cell_as_nil()));
+    call = nl_cell_as_pair(fun, nl_cell_as_pair(nl_cell_as_pair(quote, NL_HEAD_AT(item)), nil));
     if (nl_evalq(scope, call, result->value.as_pair)) return 1;
     if (NL_HEAD_AT(result).type != NL_NIL) {
       NL_HEAD_AT(result) = NL_HEAD_AT(item);
-      NL_TAIL_AT(result) = nl_cell_as_pair(nl_cell_as_nil(), nl_cell_as_nil());
+      NL_TAIL_AT(result) = nl_cell_as_pair(nil, nil);
       result = NL_NEXT_AT(result);
     }
   }
-  *result = nl_cell_as_nil();
+  *result = nil;
   return 0;
 }
 NL_BUILTIN(fold) {
@@ -685,7 +717,7 @@ NL_BUILTIN(fold) {
     return 1;
   }
   NL_FOREACH(&list, item) {
-    call = nl_cell_as_pair(fun, nl_cell_as_pair(nl_cell_as_pair(quote, NL_HEAD_AT(item)), nl_cell_as_pair(nl_cell_as_pair(quote, *result), nl_cell_as_nil())));
+    call = nl_cell_as_pair(fun, nl_cell_as_pair(nl_cell_as_pair(quote, NL_HEAD_AT(item)), nl_cell_as_pair(nl_cell_as_pair(quote, *result), nil)));
     if (nl_evalq(scope, call, result)) return 1;
   }
   return 0;
@@ -733,7 +765,7 @@ NL_BUILTIN(equal) {
   NL_FOREACH(NL_NEXT(cell), tail) {
     if (nl_evalq(scope, NL_HEAD_AT(tail), &val)) return 1;
     if (!nl_cell_equal(last, val)) {
-      *result = nl_cell_as_nil();
+      *result = nil;
       return 0;
     }
   }
@@ -817,14 +849,14 @@ NL_BUILTIN(length) {
 NL_BUILTIN(lt) {
   struct nl_cell *p, a, b;
   if (cell.type != NL_PAIR) {
-    *result = nl_cell_as_nil();
+    *result = nil;
     return 0;
   }
   if (nl_evalq(scope, NL_HEAD(cell), &a)) return 1;
   NL_FOREACH(NL_NEXT(cell), p) {
     if (nl_evalq(scope, NL_HEAD_AT(p), &b)) return 1;
     if (nl_compare(a, b) != -1) {
-      *result = nl_cell_as_nil();
+      *result = nil;
       return 0;
     }
     a = b;
@@ -835,14 +867,14 @@ NL_BUILTIN(lt) {
 NL_BUILTIN(gt) {
   struct nl_cell *p, a, b;
   if (cell.type != NL_PAIR) {
-    *result = nl_cell_as_nil();
+    *result = nil;
     return 0;
   }
   if (nl_evalq(scope, NL_HEAD(cell), &a)) return 1;
   NL_FOREACH(NL_NEXT(cell), p) {
     if (nl_evalq(scope, NL_HEAD_AT(p), &b)) return 1;
     if (nl_compare(a, b) != 1) {
-      *result = nl_cell_as_nil();
+      *result = nil;
       return 0;
     }
     a = b;
@@ -853,14 +885,14 @@ NL_BUILTIN(gt) {
 NL_BUILTIN(lte) {
   struct nl_cell *p, a, b;
   if (cell.type != NL_PAIR) {
-    *result = nl_cell_as_nil();
+    *result = nil;
     return 0;
   }
   if (nl_evalq(scope, NL_HEAD(cell), &a)) return 1;
   NL_FOREACH(NL_NEXT(cell), p) {
     if (nl_evalq(scope, NL_HEAD_AT(p), &b)) return 1;
     if (nl_compare(a, b) == 1) {
-      *result = nl_cell_as_nil();
+      *result = nil;
       return 0;
     }
     a = b;
@@ -871,14 +903,14 @@ NL_BUILTIN(lte) {
 NL_BUILTIN(gte) {
   struct nl_cell *p, a, b;
   if (cell.type != NL_PAIR) {
-    *result = nl_cell_as_nil();
+    *result = nil;
     return 0;
   }
   if (nl_evalq(scope, NL_HEAD(cell), &a)) return 1;
   NL_FOREACH(NL_NEXT(cell), p) {
     if (nl_evalq(scope, NL_HEAD_AT(p), &b)) return 1;
     if (nl_compare(a, b) == -1) {
-      *result = nl_cell_as_nil();
+      *result = nil;
       return 0;
     }
     a = b;
@@ -891,7 +923,7 @@ NL_BUILTIN(not) {
   if (result->type == NL_NIL)
     *result = t;
   else
-    *result = nl_cell_as_nil();
+    *result = nil;
   return 0;
 }
 NL_BUILTIN(head) {
@@ -920,7 +952,7 @@ NL_BUILTIN(tail) {
   if (result->type == NL_PAIR)
     *result = NL_TAIL_AT(result);
   else
-    *result = nl_cell_as_nil();
+    *result = nil;
   return 0;
 }
 NL_BUILTIN(pair) {
@@ -928,7 +960,7 @@ NL_BUILTIN(pair) {
     scope->last_err = "illegal pair: non-pair args";
     return 1;
   }
-  *result = nl_cell_as_pair(nl_cell_as_nil(), nl_cell_as_nil());
+  *result = nl_cell_as_pair(nil, nil);
   if (nl_evalq(scope, NL_HEAD(cell), result->value.as_pair)) return 1;
   if (NL_TAIL(cell).type == NL_PAIR) {
     if (nl_evalq(scope, NL_HEAD(NL_TAIL(cell)), NL_NEXT_AT(result))) return 1;
@@ -938,16 +970,16 @@ NL_BUILTIN(pair) {
 NL_BUILTIN(list) {
   struct nl_cell *in_tail, *out_tail = result;
   if (cell.type == NL_NIL) {
-    *result = nl_cell_as_nil();
+    *result = nil;
     return 0;
   }
-  *result = nl_cell_as_pair(nl_cell_as_nil(), nl_cell_as_nil());
+  *result = nl_cell_as_pair(nil, nil);
   NL_FOREACH(&cell, in_tail) {
     if (nl_evalq(scope, NL_HEAD_AT(in_tail), out_tail->value.as_pair)) return 1;
     if (NL_TAIL_AT(in_tail).type != NL_PAIR) {
       return nl_evalq(scope, NL_TAIL_AT(in_tail), NL_NEXT_AT(out_tail));
     }
-    NL_TAIL_AT(out_tail) = nl_cell_as_pair(nl_cell_as_nil(), nl_cell_as_nil());
+    NL_TAIL_AT(out_tail) = nl_cell_as_pair(nil, nil);
     out_tail = NL_NEXT_AT(out_tail);
   }
   return 0;
@@ -1094,7 +1126,7 @@ NL_BUILTIN(print) {
 }
 NL_BUILTIN(defq) {
   struct nl_cell name, body;
-  *result = nl_cell_as_nil();
+  *result = nil;
   if (cell.type != NL_PAIR) {
     scope->last_err = "illegal defq: non-pair args";
     return 1;
@@ -1257,6 +1289,7 @@ void nl_scope_define_builtins(struct nl_scope *scope) {
   NL_DEF_BUILTIN("letq", letq);
   NL_DEF_BUILTIN("list", list);
   NL_DEF_BUILTIN("map", map);
+  NL_DEF_BUILTIN("map-pair", mappair);
   NL_DEF_BUILTIN("nil?", is_nil);
   NL_DEF_BUILTIN("not", not);
   NL_DEF_BUILTIN("or", or);
