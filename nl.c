@@ -26,6 +26,7 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
+#include <unistd.h>
 #include <wchar.h>
 #include <gc.h>
 #define NL_HEAD(cell) cell.value.as_pair[0]
@@ -1266,6 +1267,23 @@ NL_BUILTIN(write_bytes) {
   scope->last_err = "unknown cell type";
   return 1;
 }
+NL_BUILTIN(exit) {
+  struct nl_cell exit_code;
+  if (cell.type == NL_NIL) exit(0);
+  if (cell.type != NL_PAIR) {
+    scope->last_err = "invalid exit: expected pair args";
+    exit(1);
+  }
+  if (nl_evalq(scope, NL_HEAD(cell), &exit_code)) return 1;
+  switch (exit_code.type) {
+  case NL_NIL: exit(0);
+  case NL_INTEGER: exit(exit_code.value.as_integer);
+  default:
+    scope->last_err = "invalid exit: expected integer exit code";
+    exit(1);
+  }
+  return 1;
+}
 void nl_scope_define_builtins(struct nl_scope *scope) {
   NL_DEF_BUILTIN("*", mul);
   NL_DEF_BUILTIN("+", add);
@@ -1281,6 +1299,7 @@ void nl_scope_define_builtins(struct nl_scope *scope) {
   NL_DEF_BUILTIN("pair", pair);
   NL_DEF_BUILTIN("defq", defq);
   NL_DEF_BUILTIN("eval", eval);
+  NL_DEF_BUILTIN("exit", exit);
   NL_DEF_BUILTIN("filter", filter);
   NL_DEF_BUILTIN("foreach", foreach);
   NL_DEF_BUILTIN("head", head);
@@ -1309,10 +1328,11 @@ void nl_scope_define_builtins(struct nl_scope *scope) {
 }
 // Main REPL
 // =========
-int nl_run_repl(struct nl_scope *scope) {
+int nl_run_repl(int interactive, struct nl_scope *scope) {
   struct nl_cell last_read, last_eval;
   for (;;) {
-    fprintf(scope->stdout, "\n> ");
+    if (interactive)
+      fprintf(scope->stdout, "\n> ");
     if (nl_read(scope, &last_read)) {
       if (scope->last_err)
         fprintf(scope->stderr, "ERROR read: %s\n", scope->last_err);
@@ -1327,8 +1347,10 @@ int nl_run_repl(struct nl_scope *scope) {
         fputs("ERROR eval\n", scope->stderr);
       return 2;
     }
-    fputs("; ", scope->stdout);
-    nl_writeq(scope, last_eval, &last_read);
+    if (interactive) {
+      fputs("; ", scope->stdout);
+      nl_writeq(scope, last_eval, &last_read);
+    }
   }
 }
 void nl_globals_init() {
@@ -1342,5 +1364,5 @@ int main() {
   nl_globals_init();
   nl_scope_init(&scope);
   nl_scope_define_builtins(&scope);
-  return nl_run_repl(&scope);
+  return nl_run_repl(isatty(STDIN_FILENO), &scope);
 }
