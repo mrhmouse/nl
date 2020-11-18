@@ -55,7 +55,7 @@ Floating point numbers are not supported, but a syntax
 may be added in the future for reading fixed-point numbers
 with a configurable scale (a la _PicoLisp_).
 
-Symbols start with any character besides `',().` and can
+Symbols start with any character besides `#',().` and can
 contain any non-whitespace character besides `()`. _TODO_
 To write a symbol that contains whitespace or characters from
 these lists, you can surround it with double quotes `""`.
@@ -220,3 +220,5 @@ There is always more to do :)
   `'(1 2 ,(+ 1 2))` should produce the list `(1 2 3)`
   while `'(1 2 ,.(range 3 5))` should produce `(1 2 3 4 5)`
 * need tail-call optimization
+* comments at between the last element of a list
+  and the closing parentheses crash the reader

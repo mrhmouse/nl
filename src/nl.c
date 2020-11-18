@@ -118,9 +118,15 @@ char *nl_intern(char *sym) {
 }
 int nl_read(struct nl_scope *scope, FILE *s_in, struct nl_cell *result) {
   struct nl_cell head, *tail;
-  int sign = 1, ch = nl_skip_whitespace(s_in);
+  int sign = 1, ch;
+ start:
+  ch = nl_skip_whitespace(s_in);
   if (ch == EOF) {
     return EOF;
+  } else if (ch == '#') {
+    do { ch = fgetc(s_in); }
+    while (ch != '\n');
+    goto start;
   } else if (ch == '-') {
     int peek = fgetc(s_in);
     if (isdigit(peek)) {
