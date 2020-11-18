@@ -1,26 +1,3 @@
-// `nl` is an _unfinished_ interpreted Lisp-1
-// with dynamic scope and PicoLisp-style "macros",
-// built on top of a handful of datatypes and builtins
-//
-// TODO
-// ====
-// * no double-quoted symbols
-//   we need a way to read & write double-quoted symbols
-//   with spaces or other special characters
-// * needs a set of core builtins
-//   must decide on a minimal set of builtins to provide
-// * needs a standard library
-//   outside of the builtins, must provide a standard
-//   library with functions for building real
-//   applications, e.g. HTML generation libraries,
-//   data structures built on cells, test frameworks, etc
-// * needs unquote operator
-//   unsure if this should work with the standard `quote`
-//   or if it should require the use of `quasiquote`. need
-//   both a single-item and a splicing version, e.g.
-//   `'(1 2 ,(+ 1 2))` should produce the list `(1 2 3)`
-//   while `'(1 2 ,.(range 3 5))` should produce `(1 2 3 4 5)`
-// * need tail-call optimization
 #include <ctype.h>
 #include <stdint.h>
 #include <stdlib.h>
@@ -38,25 +15,11 @@
 #define NL_BUILTIN(name) int nl_ ## name(struct nl_scope *scope, struct nl_cell cell, struct nl_cell *result)
 #define NL_FOREACH(start, a) for (a = start; a->type == NL_PAIR; a = NL_NEXT_AT(a))
 #define NL_DEF_BUILTIN(sym, name) nl_scope_put(scope, nl_intern(strdup(sym)), nl_cell_as_int((int64_t)nl_ ## name))
-//
-// Structures and typedefs
-// =======================
-// the cell is the basic building block of all data
-// in `nl`, and can be an integer, a symbol, the special
-// value `nil` or a pair of two other cells.
-//
 struct nl_cell {
   enum {
-        // the special value `nil` is the default value, and
-        // the only value that is treated as "false" by comparisons
         NL_NIL,
-        // integers are signed, 64-bit values
         NL_INTEGER,
-        // pairs can be used to compose cells, and so are the building
-        // blocks of all higher-level data structures
         NL_PAIR,
-        // symbols are immutable strings, used for variable names
-        // as well as plain data
         NL_SYMBOL,
   } type;
   union {
@@ -65,57 +28,29 @@ struct nl_cell {
     struct nl_cell *as_pair;
   } value;
 };
-// `nl` has dynamic scope, which means that the environment
-// variables are evaluated in can change over time (multiple evaluations).
-//
-// variables are kept in a linked list along with their name, which
-// we make sure is _interned_ for fast pointer comparisons on lookup
 struct nl_scope_symbols {
   char *name;
   struct nl_cell value;
   struct nl_scope_symbols *next;
 };
-// scopes can be nested, with one parent scope having many potential
-// child scopes. on lookup, if a symbol isn't found in the child scope,
-// then the parent scope is consulted recursively until a match is found,
-// or there are no more parent scopes. if no match is found, the value `nil`
-// is returned by default
 struct nl_scope {
   char *last_err;
   struct nl_scope_symbols *symbols;
   struct nl_scope *parent_scope;
 };
-// native functions (currently only builtins) all adhere to the same signature.
-// all native functions return an error code: `0` for no error. they receive a scope
-// in which to evaluate symbols, and a cell which holds the argument, unevaluated.
-// the result of the function should be written to the `result` pointer before exit
-//
-// in most cases, the cell argument is a pair at the head of a linked list of arguments.
-// in some cases though, such as with the `quote` builtin, it makes sense to accept
-// arguments of other types than pairs.
 typedef int (*nl_native_func)(struct nl_scope *, struct nl_cell, struct nl_cell *result);
-// Constructors and Initializers
-// =============================
-// create a nil cell: the default value, and the only "false" value
+static struct nl_cell nil, t, quote, unquote, nl_in, nl_out, nl_err;
 struct nl_cell nl_cell_as_nil() {
   struct nl_cell c;
   c.type = NL_NIL;
   return c;
 }
-// create a cell containing the given integer
 struct nl_cell nl_cell_as_int(int64_t value) {
   struct nl_cell c;
   c.type = NL_INTEGER;
   c.value.as_integer = value;
   return c;
 }
-// create a cell containing the given head and tail.
-// *this function allocates*
-//
-// note that, unlike most Lisps, pairs consist of a "head"
-// and a "tail" -- not a "car" and a "cdr". these arbitrary
-// words could just as easily be "left" and "right", but in
-// 2020 we can stop calling them "car" and "cdr" :^)
 struct nl_cell nl_cell_as_pair(struct nl_cell head, struct nl_cell tail) {
   struct nl_cell c;
   c.type = NL_PAIR;
@@ -124,16 +59,12 @@ struct nl_cell nl_cell_as_pair(struct nl_cell head, struct nl_cell tail) {
   NL_TAIL(c) = tail;
   return c;
 }
-// create a cell referencing the given symbol, which should
-// already have been interned
 struct nl_cell nl_cell_as_symbol(char *interned_symbol) {
   struct nl_cell c;
   c.type = NL_SYMBOL;
   c.value.as_symbol = interned_symbol;
   return c;
 }
-// these values are used internally
-static struct nl_cell nil, t, quote, unquote, nl_in, nl_out, nl_err;
 int64_t nl_list_length(struct nl_cell l) {
   int64_t len = 0;
   struct nl_cell *p;
@@ -143,7 +74,6 @@ int64_t nl_list_length(struct nl_cell l) {
   if (p->type != NL_NIL) ++len;
   return len;
 }
-// initialize a scope, defining the first values
 void nl_scope_init(struct nl_scope *scope) {
   scope->last_err = NULL;
   scope->parent_scope = NULL;
@@ -152,9 +82,6 @@ void nl_scope_init(struct nl_scope *scope) {
   scope->symbols->value.type = NL_NIL;
   scope->symbols->next = NULL;
 }
-// Reading Data from Input
-// =======================
-// read the next non-whitespace character from the given input
 int nl_skip_whitespace(FILE *in) {
   int ch;
   do {
@@ -162,9 +89,6 @@ int nl_skip_whitespace(FILE *in) {
   } while (isspace(ch));
   return ch;
 }
-// symbols are permanently interned into the program memory.
-// for long-running programs this is potentially an issue, so
-// try to avoid creating symbols based on user input
 struct nl_interned_symbols {
   char *sym;
   struct nl_interned_symbols *next;
@@ -192,15 +116,12 @@ char *nl_intern(char *sym) {
   }
   return NULL;
 }
-// read the next value from the stdin in scope.
 int nl_read(struct nl_scope *scope, FILE *s_in, struct nl_cell *result) {
   struct nl_cell head, *tail;
   int sign = 1, ch = nl_skip_whitespace(s_in);
   if (ch == EOF) {
     return EOF;
   } else if (ch == '-') {
-    // the hyphen can be used to indicate negative numbers, but
-    // it could also be the start of a symbol
     int peek = fgetc(s_in);
     if (isdigit(peek)) {
       sign = -1;
@@ -210,7 +131,6 @@ int nl_read(struct nl_scope *scope, FILE *s_in, struct nl_cell *result) {
     ungetc(peek, s_in);
     goto NL_READ_SYMBOL;
   } else if (isdigit(ch)) {
-    // otherwise, only numbers start with digits
   NL_READ_DIGIT:
     *result = nl_cell_as_int(ch - '0');
     while (isdigit(ch = fgetc(s_in))) {
@@ -225,24 +145,14 @@ int nl_read(struct nl_scope *scope, FILE *s_in, struct nl_cell *result) {
     scope->last_err = "quoted symbols not implemented";
     return 1;
   } else if ('\'' == ch) {
-    // if the value is prefixed with the single-quote character,
-    // then it is returned as the tail of a pair, with the symbol
-    // `quote` as the head
     if (nl_read(scope, s_in, &head)) return 1;
     *result = nl_cell_as_pair(quote, head);
     return 0;
   } else if (',' == ch) {
-    // if the value is prefixed with the single-quote character,
-    // then it is returned as the tail of a pair, with the symbol
-    // `unquote` as the head. TODO this doesn't currently do anything
-    // at evaluation time, though. it might later interact with `quote`
     if (nl_read(scope, s_in, &head)) return 1;
     *result = nl_cell_as_pair(unquote, head);
     return 0;
   } else if ('(' == ch) {
-    // lists are written enclosed in parentheses, and can have two or
-    // more items separated by whitespace. they are encoded as chains
-    // of pairs, where the last tail is any non-pair cell -- usually `nil`
     ch = nl_skip_whitespace(s_in);
     if (ch == ')') {
       *result = nil;
@@ -256,9 +166,6 @@ int nl_read(struct nl_scope *scope, FILE *s_in, struct nl_cell *result) {
       ch = nl_skip_whitespace(s_in);
       if (ch == ')') return 0;
       if (ch == '.') {
-        // if the last item in a list is separated from the other
-        // items using a period, then it will be the last tail of
-        // the chain of pairs composing the list
         if (nl_read(scope, s_in, tail)) return 1;
         if (nl_skip_whitespace(s_in) != ')') {
           scope->last_err = "illegal list";
@@ -266,25 +173,18 @@ int nl_read(struct nl_scope *scope, FILE *s_in, struct nl_cell *result) {
         }
         return 0;
       }
-      // otherwise, the last tail of the chain is set to `nil`
       ungetc(ch, s_in);
       if (nl_read(scope, s_in, &head)) return 1;
       *tail = nl_cell_as_pair(head, nil);
       tail = NL_NEXT_AT(tail);
     }
   } else {
-    // any other character that isn't matched can be used to start a symbol
     int used, allocated;
     char *buf;
   NL_READ_SYMBOL:
     used = 0;
     allocated = 16;
     buf = malloc(sizeof(char) * allocated);
-    // symbols can contain any non-whitespace character besides parentheses,
-    // since these are used to denote lists. this means that while a symbol
-    // cannot normally _start_ with characters like the period or comma, it
-    // *can* contain them. if you intend to use these characters as operators,
-    // ensure they're separated from other symbols on the left by whitespace
     for (; !isspace(ch) && ch != '(' && ch != ')'; ch = fgetc(s_in)) {
       buf[used++] = ch;
       if (used == allocated) {
@@ -295,22 +195,10 @@ int nl_read(struct nl_scope *scope, FILE *s_in, struct nl_cell *result) {
     ungetc(ch, s_in);
     buf[used] = '\0';
     buf = realloc(buf, sizeof(char) * used);
-    // all symbols get interned as soon as they're read; only unique values
-    // are kept in memory. symbols don't disappear from memory once read
     *result = nl_cell_as_symbol(nl_intern(buf));
     return 0;
   }
 }
-// Working with Scope
-// ==================
-// putting a value into a scope overwrites the first value with a matching
-// name, including symbols inherited from the parent scopes. if no matching
-// value is found, and there are no more parent scopes, then the value is added
-// to the list of symbols in that scope.
-//
-// importantly, this means that defining a value for a new symbol in a child scope
-// actually writes that value into the top-most parent scope. this construction
-// allows the user to define new functions which define top-level values
 void nl_scope_put(struct nl_scope *scope, char *name, struct nl_cell value) {
   struct nl_scope_symbols *s;
   for (; scope != NULL; scope = scope->parent_scope) {
@@ -328,10 +216,6 @@ void nl_scope_put(struct nl_scope *scope, char *name, struct nl_cell value) {
     }
   }
 }
-// getting a value from a scope searches for an exact pointer match of the
-// name through all symbols in the scope, and then through all parent scopes.
-// if no matching symbol is found, and there are no more parent scopes,
-// the default value `nil` is returned
 void nl_scope_get(struct nl_scope *scope, char *name, struct nl_cell *result) {
   struct nl_scope_symbols *s;
   for (; scope != NULL; scope = scope->parent_scope) {
@@ -343,14 +227,6 @@ void nl_scope_get(struct nl_scope *scope, char *name, struct nl_cell *result) {
   }
   *result = nil;
 }
-// linking a scope to a parent scope also copies references to the scope's I/O streams.
-// this will allow child scopes to temporarily redirect their input or output to files
-void nl_scope_link(struct nl_scope *child, struct nl_scope *parent) {
-  child->parent_scope = parent;
-}
-// Language Builtins
-// =================
-// all builtins have the same signature as native functions
 NL_BUILTIN(evalq);
 int nl_setqe(struct nl_scope *target_scope, struct nl_scope *eval_scope, struct nl_cell args, struct nl_cell *result) {
   struct nl_cell *tail;
@@ -373,18 +249,6 @@ int nl_setqe(struct nl_scope *target_scope, struct nl_scope *eval_scope, struct 
   }
   return 0;
 }
-/**
- * (letq (A 1 B 2
- *        C 3 D 4)
- *  (body ...)
- *  (more-body ...))
- *
- * Create a symbols list for the duration, based on the current symbols list.
- * Evaluate each value and set it to the quoted symbol, as with setq, in the first arg.
- * Evaluate each scopement in the remaining args.
- * Discard the symbols list.
- * Result is the last evaluated scopement.
- */
 NL_BUILTIN(letq) {
   struct nl_scope body_scope;
   struct nl_cell vars, body, *tail;
@@ -402,7 +266,7 @@ NL_BUILTIN(letq) {
   if (vars.type == NL_PAIR) {
     if (nl_setqe(&body_scope, scope, vars, result)) return 1;
   }
-  nl_scope_link(&body_scope, scope);
+  body_scope.parent_scope = scope;
   NL_FOREACH(&body, tail) {
     if (nl_evalq(&body_scope, NL_HEAD_AT(tail), result)) return 1;
   }
@@ -461,7 +325,7 @@ NL_BUILTIN(call) {
     scope->last_err = "illegal call: illegal parameter list in lambda";
     return 1;
   }
-  nl_scope_link(&call_scope, scope);
+  call_scope.parent_scope = scope;
   NL_FOREACH(&NL_TAIL(NL_HEAD(cell)), p) {
     if (nl_evalq(&call_scope, NL_HEAD_AT(p), result)) return 1;
   }
@@ -533,10 +397,6 @@ int nl_cell_equal(struct nl_cell a, struct nl_cell b) {
 NL_BUILTIN(apply) {
   if (cell.type != NL_PAIR) {
     scope->last_err = "illegal apply call: non-pair args";
-    return 1;
-  }
-  if (NL_HEAD(cell).type != NL_SYMBOL) {
-    scope->last_err = "illegal apply call: first arg should be symbol";
     return 1;
   }
   if (NL_TAIL(cell).type != NL_PAIR) {
@@ -713,12 +573,6 @@ NL_BUILTIN(fold) {
   }
   return 0;
 }
-//
-// > (unfold 10 () pair
-//           '((N) (> N 0))
-//           '((N) (- N 1)))
-// ; (1 2 3 4 5 6 7 8 9 10)
-//
 NL_BUILTIN(unfold) {
   struct nl_cell seed, pair_f, continue_f, next_seed_f, call, v;
   if (cell.type != NL_PAIR) {
@@ -767,7 +621,6 @@ int nl_compare(struct nl_cell a, struct nl_cell b) {
   struct nl_cell *i, *j;
   int item_result;
   int64_t a_len, b_len;
-  // same-type comparisons
   if (a.type == b.type)
     switch (a.type) {
     case NL_NIL: return 0;
@@ -780,7 +633,6 @@ int nl_compare(struct nl_cell a, struct nl_cell b) {
       a_len = nl_list_length(a);
       b_len = nl_list_length(b);
       if (a_len == b_len) {
-        // item-by-item comparison
         for (i = &a, j = &b; i->type == NL_PAIR && j->type == NL_PAIR; i = NL_NEXT_AT(i), j = NL_NEXT_AT(j)) {
           item_result = nl_compare(NL_HEAD_AT(i), NL_HEAD_AT(j));
           if (item_result) return item_result;
@@ -790,17 +642,12 @@ int nl_compare(struct nl_cell a, struct nl_cell b) {
       if (a_len < b_len) return -1;
       return 1;
     }
-  // cross-type comparisons
-  // nil is the smallest type
   if (a.type == NL_NIL) return -1;
   if (b.type == NL_NIL) return 1;
-  // integers are bigger than nil, but smaller than other types
   if (a.type == NL_INTEGER) return -1;
   if (b.type == NL_INTEGER) return 1;
-  // symbols are bigger than ints
   if (a.type == NL_SYMBOL) return -1;
   if (b.type == NL_SYMBOL) return 1;
-  // pairs of any size are bigger than all other types
   if (a.type == NL_PAIR) return -1;
   return 1;
 }
@@ -1326,11 +1173,11 @@ void nl_scope_define_builtins(struct nl_scope *scope) {
   NL_DEF_BUILTIN(">=", gte);
   NL_DEF_BUILTIN("and", and);
   NL_DEF_BUILTIN("apply", apply);
-  NL_DEF_BUILTIN("pair", pair);
   NL_DEF_BUILTIN("defq", defq);
   NL_DEF_BUILTIN("eval", eval);
   NL_DEF_BUILTIN("exit", exit);
   NL_DEF_BUILTIN("filter", filter);
+  NL_DEF_BUILTIN("fold", fold);
   NL_DEF_BUILTIN("foreach", foreach);
   NL_DEF_BUILTIN("head", head);
   NL_DEF_BUILTIN("integer?", is_integer);
@@ -1343,11 +1190,11 @@ void nl_scope_define_builtins(struct nl_scope *scope) {
   NL_DEF_BUILTIN("nil?", is_nil);
   NL_DEF_BUILTIN("not", not);
   NL_DEF_BUILTIN("or", or);
+  NL_DEF_BUILTIN("pair", pair);
   NL_DEF_BUILTIN("pair?", is_pair);
   NL_DEF_BUILTIN("print", print);
   NL_DEF_BUILTIN("printq", printq);
   NL_DEF_BUILTIN("quote", quote);
-  NL_DEF_BUILTIN("fold", fold);
   NL_DEF_BUILTIN("set", set);
   NL_DEF_BUILTIN("setq", setq);
   NL_DEF_BUILTIN("symbol?", is_symbol);
@@ -1357,8 +1204,6 @@ void nl_scope_define_builtins(struct nl_scope *scope) {
   NL_DEF_BUILTIN("write-bytes", write_bytes);
   NL_DEF_BUILTIN("writeq", writeq);
 }
-// Main REPL
-// =========
 int nl_run_repl(int interactive, struct nl_scope *scope) {
   struct nl_cell last_read, last_eval, c_in, c_out, c_err;
   FILE *s_in = stdin, *s_out = stdout, *s_err = stderr;
