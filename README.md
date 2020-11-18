@@ -56,7 +56,7 @@ may be added in the future for reading fixed-point numbers
 with a configurable scale (a la _PicoLisp_).
 
 Symbols start with any character besides `#',().` and can
-contain any non-whitespace character besides `()`. _TODO_
+contain any non-whitespace character besides `()`.
 To write a symbol that contains whitespace or characters from
 these lists, you can surround it with double quotes `""`.
 Any double quotes intended to be included as part of this
@@ -203,9 +203,6 @@ TODO
 ====================
 There is always more to do :)
 * more docs
-* no double-quoted symbols
-  we need a way to read & write double-quoted symbols
-  with spaces or other special characters
 * needs a set of core builtins
   must decide on a minimal set of builtins to provide
 * needs a standard library

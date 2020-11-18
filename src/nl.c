@@ -118,7 +118,8 @@ char *nl_intern(char *sym) {
 }
 int nl_read(struct nl_scope *scope, FILE *s_in, struct nl_cell *result) {
   struct nl_cell head, *tail;
-  int sign = 1, ch;
+  int ch, sign = 1, used = 0, allocated = 16;
+  char *buf;
  start:
   ch = nl_skip_whitespace(s_in);
   if (ch == EOF) {
@@ -147,9 +148,26 @@ int nl_read(struct nl_scope *scope, FILE *s_in, struct nl_cell *result) {
     ungetc(ch, s_in);
     return 0;
   } else if ('"' == ch) {
-    // TODO :^)
-    scope->last_err = "quoted symbols not implemented";
-    return 1;
+    buf = malloc(sizeof(char) * allocated);
+    for (ch = fgetc(s_in); ch != '"'; ch = fgetc(s_in)) {
+      if (ch == '\\')
+        buf[used++] = fgetc(s_in);
+      else
+        buf[used++] = ch;
+      if (used == allocated) {
+        allocated *= 2;
+        buf = realloc(buf, sizeof(char) * allocated);
+      }
+    }
+    buf[used] = '\0';
+    buf = realloc(buf, sizeof(char) * used);
+    if (used == 0) {
+      free(buf);
+      *result = nil;
+    } else {
+      *result = nl_cell_as_symbol(nl_intern(buf));
+    }
+    return 0;
   } else if ('\'' == ch) {
     if (nl_read(scope, s_in, &head)) return 1;
     *result = nl_cell_as_pair(quote, head);
@@ -185,11 +203,7 @@ int nl_read(struct nl_scope *scope, FILE *s_in, struct nl_cell *result) {
       tail = NL_NEXT_AT(tail);
     }
   } else {
-    int used, allocated;
-    char *buf;
   NL_READ_SYMBOL:
-    used = 0;
-    allocated = 16;
     buf = malloc(sizeof(char) * allocated);
     for (; !isspace(ch) && ch != '(' && ch != ')'; ch = fgetc(s_in)) {
       buf[used++] = ch;
@@ -998,6 +1012,36 @@ NL_BUILTIN(set) {
   }
   return 0;
 }
+void nl_write_symbol(FILE *out, const char *sym) {
+  const char *s = sym;
+  switch (*sym) {
+  case '.':
+  case ',':
+  case '\'':
+  case '"':
+  case '#':
+    goto quoted;
+  default:
+    if (isdigit(*s)) goto quoted;
+    break;
+  }
+  for (; *s != '\0'; ++s) {
+    if (isspace(*s) || *s == '(' || *s == ')')
+      goto quoted;
+  }
+  fprintf(out, "%s", sym);
+  return;
+ quoted:
+  fprintf(out, "\"%.*s", (int)(s - sym), sym);
+  fputc(*s, out);
+  for (sym = ++s; *s != '\0'; ++s) {
+    if (*s == '\\' || *s == '"') {
+      fprintf(out, "%.*s\\%c", (int)(s - sym), sym, *s);
+      sym = s+1;
+    }
+  }
+  fprintf(out, "%s\"", sym);
+}
 NL_BUILTIN(writeq) {
   struct nl_cell *tail, s_out;
   FILE *out = stdout;
@@ -1014,7 +1058,7 @@ NL_BUILTIN(writeq) {
     *result = cell;
     return 0;
   case NL_SYMBOL:
-    fprintf(out, "%s", cell.value.as_symbol);
+    nl_write_symbol(out, cell.value.as_symbol);
     *result = cell;
     return 0;
   case NL_PAIR:
@@ -1036,8 +1080,8 @@ NL_BUILTIN(writeq) {
         fprintf(out, " . %li)", tail->value.as_integer);
         return 0;
       case NL_SYMBOL:
-        // TODO write quoted symbols
-        fprintf(out, " . %s)", tail->value.as_symbol);
+        fprintf(out, " . ");
+        nl_write_symbol(out, tail->value.as_symbol);
         return 0;
       }
     }

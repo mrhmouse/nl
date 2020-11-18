@@ -1,1 +1,0 @@
-(defq newline () (write-bytes 10))
