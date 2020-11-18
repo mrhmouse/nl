@@ -249,30 +249,6 @@ int nl_setqe(struct nl_scope *target_scope, struct nl_scope *eval_scope, struct 
   }
   return 0;
 }
-NL_BUILTIN(letq) {
-  struct nl_scope body_scope;
-  struct nl_cell vars, body, *tail;
-  if (cell.type != NL_PAIR) {
-    scope->last_err = "illegal letq: non-pair args";
-    return 1;
-  }
-  vars = NL_HEAD(cell);
-  body = NL_TAIL(cell);
-  if (body.type != NL_PAIR) {
-    scope->last_err = "illegal letq: non-pair body";
-    return 1;
-  }
-  nl_scope_init(&body_scope);
-  if (vars.type == NL_PAIR) {
-    if (nl_setqe(&body_scope, scope, vars, result)) return 1;
-  }
-  body_scope.parent_scope = scope;
-  NL_FOREACH(&body, tail) {
-    if (nl_evalq(&body_scope, NL_HEAD_AT(tail), result)) return 1;
-  }
-  if (tail->type != NL_NIL) return nl_evalq(&body_scope, *tail, result);
-  return 0;
-}
 NL_BUILTIN(writeq);
 NL_BUILTIN(call) {
   struct nl_cell *p, *a, v;
@@ -1182,7 +1158,6 @@ void nl_scope_define_builtins(struct nl_scope *scope) {
   NL_DEF_BUILTIN("head", head);
   NL_DEF_BUILTIN("integer?", is_integer);
   NL_DEF_BUILTIN("length", length);
-  NL_DEF_BUILTIN("letq", letq);
   NL_DEF_BUILTIN("list", list);
   NL_DEF_BUILTIN("load", load);
   NL_DEF_BUILTIN("map", map);
