@@ -1,8 +1,12 @@
 #include "nl.h"
+#include <ctype.h>
+#include <stdlib.h>
+#include <stdio.h>
+#include <string.h>
+#include <unistd.h>
+#include <wchar.h>
 #include <dlfcn.h>
 #include <gc.h>
-#define NL_BUILTIN(name) int nl_ ## name(struct nl_scope *scope, struct nl_cell cell, struct nl_cell *result)
-#define NL_DEF_BUILTIN(sym, name) nl_scope_put(scope, nl_intern(strdup(sym)), nl_cell_as_int((int64_t)nl_ ## name))
 static struct nl_cell nil, t, quote, unquote, nl_in, nl_out, nl_err;
 struct nl_cell nl_cell_as_nil() {
   struct nl_cell c;
