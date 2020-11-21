@@ -1179,6 +1179,7 @@ NL_BUILTIN(loadnative) {
     }
     nl_scope_put(scope, NL_TAIL(NL_HEAD_AT(n)).value.as_symbol, nl_cell_as_int((int64_t)f));
   }
+  *result = t;
   return 0;
 }
 void nl_scope_define_builtins(struct nl_scope *scope) {
