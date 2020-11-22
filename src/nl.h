@@ -53,7 +53,9 @@ struct nl_scope {
  */
 typedef int (*nl_native_func)(struct nl_scope *, struct nl_cell, struct nl_cell *result);
 NL_BUILTIN(evalq);
-NL_BUILTIN(writeq);
+NL_BUILTIN(quote);
+NL_BUILTIN(load);
+NL_BUILTIN(loadnative);
 struct nl_cell nl_cell_as_nil();
 struct nl_cell nl_cell_as_int(int64_t);
 /**
@@ -88,8 +90,6 @@ char *nl_intern(char *);
 /**
  * Read the next value from the given file, storing it into the given cell location.
  * Returns non-zero on error.
- *
- * TODO drop the scope parameter and use an error code
  */
 int nl_read(struct nl_scope *, FILE *, struct nl_cell *);
 /**
