@@ -1,4 +1,6 @@
 #include <stdint.h>
+#include <stdio.h>
+#include <unistd.h>
 #define NL_HEAD(cell) cell.value.as_pair[0]
 #define NL_TAIL(cell) cell.value.as_pair[1]
 #define NL_NEXT(cell) (cell.value.as_pair+1)
@@ -50,6 +52,8 @@ struct nl_scope {
  * result pointer, and return non-zero on error.
  */
 typedef int (*nl_native_func)(struct nl_scope *, struct nl_cell, struct nl_cell *result);
+NL_BUILTIN(evalq);
+NL_BUILTIN(writeq);
 struct nl_cell nl_cell_as_nil();
 struct nl_cell nl_cell_as_int(int64_t);
 /**

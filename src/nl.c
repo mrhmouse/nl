@@ -1,9 +1,7 @@
 #include "nl.h"
 #include <ctype.h>
 #include <stdlib.h>
-#include <stdio.h>
 #include <string.h>
-#include <unistd.h>
 #include <wchar.h>
 #include <dlfcn.h>
 #include <gc.h>
@@ -217,7 +215,6 @@ void nl_scope_get(struct nl_scope *scope, char *name, struct nl_cell *result) {
   }
   *result = nil;
 }
-NL_BUILTIN(evalq);
 int nl_setqe(struct nl_scope *target_scope, struct nl_scope *eval_scope, struct nl_cell args, struct nl_cell *result) {
   struct nl_cell *tail;
   if (args.type != NL_PAIR) {
@@ -239,7 +236,6 @@ int nl_setqe(struct nl_scope *target_scope, struct nl_scope *eval_scope, struct 
   }
   return 0;
 }
-NL_BUILTIN(writeq);
 NL_BUILTIN(call) {
   struct nl_cell *p, *a, v, head;
   struct nl_scope call_scope;
