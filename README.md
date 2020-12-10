@@ -1,8 +1,11 @@
 `nl`
 ======
-This repository hosts an _in-progress_ interpreter
+This repository hosts an _abandoned_ interpreter
 for a homebrewed Lisp-1 with dynamic scope and a
 minimal set of datatypes.
+
+Why is it abandoned? I wanted to try something with one more type,
+since the `nil` type seemed wasteful..
 
 The name stands for "nil lisp" or "not a lisp" and
 might change at some point -- it was just the first
